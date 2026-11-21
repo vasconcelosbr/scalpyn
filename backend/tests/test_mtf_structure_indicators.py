@@ -45,6 +45,9 @@ def sample(state='TRIGGERED', count=60, window=50):
 @pytest.mark.parametrize('state', ['TRIGGERED', 'ARMED', 'WAIT', 'NO_TRADE'])
 def test_observer_enrichment_preserves_entire_decision_and_snapshot_identity(state):
     cfg, data = sample(state)
+    if state == 'NO_TRADE':
+        # Display enrichment cannot repair a required profile input retroactively.
+        data['analysis']['unavailable_profile_indicators'] = ['ema50']
     before = deepcopy(data)
     old = history.snapshot(data, {}, cfg, HistoryConfig(), iso(28800))
     enrich_observer_frames(data)
@@ -54,6 +57,9 @@ def test_observer_enrichment_preserves_entire_decision_and_snapshot_identity(sta
     assert new['analysis'] == old['analysis']  # raw/total, vetoes, status, plan and hashes
     assert new['quality'] == old['quality']
     assert new['data_reasons'] == old['data_reasons']
+    if state == 'NO_TRADE':
+        assert new['quality'] == 'pending'
+        assert 'PROFILE_INDICATORS_UNAVAILABLE' in new['data_reasons']
     assert evaluate('TEST_USDT', data['frames'], cfg, 28800, .01,
                     'DOWN' if state == 'NO_TRADE' else 'UP') == evaluate(
         'TEST_USDT', before['frames'], cfg, 28800, .01, 'DOWN' if state == 'NO_TRADE' else 'UP')
@@ -91,6 +97,14 @@ def test_forming_candle_is_excluded_and_missing_atr_is_not_fabricated():
         assert data['frames'][tf]['indicators']==original['frames'][tf]['indicators']
     data['frames']['4h']['atr']=None
     assert structure_context(data,cfg,now=28802)['frames']['4h']['extension_atr'] is None
+
+
+def test_incomplete_legacy_frame_without_producer_metadata_is_unchanged():
+    from test_mtf_history import sample as legacy_sample
+    data = legacy_sample()
+    before = deepcopy(data)
+    enrich_observer_frames(data)
+    assert data == before
 
 
 @pytest.mark.asyncio
@@ -136,3 +150,31 @@ async def test_capture_persists_structural_ema_for_profile_without_ema(monkeypat
     assert payload['analysis']==before
     assert {p['timeframe'] for p in payload['indicators'] if p['name']=='ema50'}==set(TF_SECONDS)
     assert history.chart.chart_data.await_args.kwargs=={'include_display':False}
+
+
+@pytest.mark.asyncio
+async def test_real_chart_observer_frames_use_market_closed_flag(monkeypatch):
+    from app.services import mtf_chart_service as chart, mtf_pump_flow
+    from app.services.market_data_service import market_data_service
+    cfg = MTFChartConfig.model_validate(experimental_preset())
+    now = 14400*100
+    profile = SimpleNamespace(id=uuid4(),config={'default_timeframe':'4h'})
+    config = {'atr':{'enabled':True,'period':14},'ema':{'enabled':True,'periods':[50]}}
+    monkeypatch.setattr(chart,'profile_context',AsyncMock(return_value=(profile,config,{}, {'atr'},['atr'])))
+    monkeypatch.setattr(chart,'calculation_window',lambda *args:50)
+    monkeypatch.setattr(chart.time,'time',lambda:now)
+    async def fetch(symbol,tf,cfg,limit=None):
+        return [dict(candle(t=now-(60-i)*TF_SECONDS[tf],c=100+math.sin(i)),is_closed=True)
+                for i in range(60)]
+    monkeypatch.setattr(chart,'market_candles',fetch)
+    monkeypatch.setattr(market_data_service,'fetch_orderbook_metrics',AsyncMock(
+        return_value={'spread_pct':.01,'market_data_source':'gate.io'}))
+    monkeypatch.setattr(mtf_pump_flow,'load_context',AsyncMock(return_value=None))
+    data = await chart.chart_data(object(),uuid4(),'BTC_USDT',profile.id,cfg,include_display=False)
+    assert all('ema50' not in f['indicators'] for f in data['frames'].values())
+    assert all(c['is_closed'] and 'closed' not in c for f in data['frames'].values() for c in f['candles'])
+    before = deepcopy(data['analysis'])
+    enrich_observer_frames(data)
+    payload = history.snapshot(data,{},cfg,HistoryConfig(),iso(now))
+    assert payload['analysis']==before
+    assert {p['timeframe'] for p in payload['indicators'] if p['name']=='ema50'}==set(TF_SECONDS)
