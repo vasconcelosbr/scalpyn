@@ -2866,7 +2866,7 @@
       "files": [
         {"path": "backend/app/services/mtf_btc_market.py", "contains_all": ["MTF_BTC_MARKET_DISPLAY_ONLY", "GATE_TICKERS_URL", "GATE_SPOT_URL", "TICKER_VS_MINUTE_CLOSE"]},
         {"path": "backend/tests/test_mtf_btc_market.py", "contains_all": ["test_rolling_returns_use_prior_close_and_independent_signs", "test_authenticated_endpoint_releases_db_without_evaluating_or_writing", "https://api.gateio.ws/api/v4/spot/"]},
-        {"path": "frontend/components/mtf/MTFBitcoinTicker.tsx", "contains_all": ["/mtf/btc-market", "Gate.io", "ArrowDown", "ArrowUp", "MTF_BTC_VETO_READING", "analysis.btc_trend", "Tendência do Bitcoin · 4H"]},
+        {"path": "frontend/components/mtf/MTFBitcoinTicker.tsx", "contains_all": ["/mtf/btc-market", "Gate.io", "ArrowDown", "ArrowUp", "MTF_BTC_VETO_READING", "analysis.btc_trend", "analysis.btc_context.frames[tf]", "activeTimeframe", "Veto ativo"]},
         {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFBitcoinTicker", "timezone={prefs.timezone} analysis={analysis}", "chartRemovalState"]}
       ]
     },
