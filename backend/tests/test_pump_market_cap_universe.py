@@ -91,6 +91,10 @@ def test_drain_query_is_bounded_and_support_cannot_extend_frontier(monkeypatch):
 @pytest.mark.parametrize('fail_first_support', [False, True])
 @pytest.mark.parametrize('capture_failure', [False, True])
 def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch, eligible, drains, cadence, fail_first_support, capture_failure):
+    _exercise_cycle(monkeypatch, eligible, drains, cadence, fail_first_support, capture_failure)
+
+
+def _exercise_cycle(monkeypatch, eligible, drains, cadence, fail_first_support, capture_failure):
     from app.services import pump_monitor_service as svc
     from app.services import pump_opportunity_service as opportunities
     from app import database
@@ -133,6 +137,10 @@ def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch
         async def set(self, key, value, ex):
             redis_values[key] = value
             if ':latest:' in key: captured['latest'] = json.loads(value)
+        async def eval(self, script, count, latest_key, state_key, envelope, ttl, state, state_ttl):
+            await self.set(latest_key, envelope, ttl)
+            await self.set(state_key, state, state_ttl)
+            return 1
     async def redis(): return Redis()
     monkeypatch.setattr(database, 'run_db_task', run)
     monkeypatch.setattr(svc, '_now_ms', lambda: now_ms)
@@ -166,6 +174,37 @@ def test_cycle_separates_ranking_and_drain_and_clears_empty_envelope(monkeypatch
     assert all(r['score'] is None and not r['pool_member'] for r in support)
     observations = [r for r in captured['records'] if r not in support]
     assert len(observations) == (len(eligible) if cadence == 1 and not (fail_first_support and drains) else 0)
+    return captured
+
+
+@pytest.mark.parametrize('storage_failure', [False, True])
+def test_cycle_publishes_timing_after_final_direction_and_survives_storage_failure(monkeypatch, storage_failure):
+    from app.services import pump_monitor_service as svc, pump_monitor_timing as timing
+    final_arrow = {'direction': 'long', 'strength': 'forte', 'reason': 'so_spot+ml_confirma'}
+    original_apply = svc.apply_engines
+    seen = []
+    stamp = '2026-10-01T12:02:10+00:00'
+    fields = dict(monitor_entered_at=stamp, tracking_started_at=stamp,
+                  last_strong_long_at=stamp, timing_initial_baseline=False, timing_status='available')
+    def apply(rows, *args):
+        original_apply(rows, *args)
+        for row in rows:
+            row['direction'] = final_arrow
+    async def record(db, user, pool, rows, **kwargs):
+        seen.extend(rows)
+        assert all(row['direction'] == final_arrow for row in rows)
+        assert kwargs['cycle_at'].isoformat() == stamp
+        if storage_failure:
+            raise RuntimeError('migration not applied')
+        return {row['symbol']: fields for row in rows}
+    monkeypatch.setattr(svc, 'apply_engines', apply)
+    monkeypatch.setattr(timing, 'record_cycle', record)
+    captured = _exercise_cycle(
+        monkeypatch, ['BIG'], ['SMALL'], 1, False, False)
+    assert [row['symbol'] for row in seen] == ['BIG']
+    published = captured['latest']['rows'][0]
+    assert {key: published[key] for key in timing.TIMING_FIELDS} == (
+        timing.unavailable_timing() if storage_failure else fields)
 
 
 def test_label_targets_and_export_exclude_price_only_support():

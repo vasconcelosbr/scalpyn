@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowDown, ArrowUp, Columns3, RefreshCw, ShieldAlert } from "lucide-react";
 
 import { apiGet, apiPut } from "@/lib/api";
+import { pumpTimingDisplay, type PumpMonitorTiming } from "@/lib/pump-monitor-timing";
 import styles from "./pump-monitor.module.css";
 import PumpOpportunityPanel from "@/components/pump-monitor/PumpOpportunityPanel";
 import CapitalFlowIndicator, { MlStatusChip, type CapitalFlow, type V1Regime } from "@/components/pump-monitor/CapitalFlowIndicator";
@@ -18,7 +19,7 @@ type Cell = {
   age_seconds?: number | null;
 };
 type Component = { value: unknown; normalized?: number; weight: number; contribution: number | null; reason?: string | null };
-type Row = {
+type Row = PumpMonitorTiming & {
   symbol: string;
   indicators: Record<string, Cell>;
   pump_monitor_score: number | null;
@@ -144,6 +145,17 @@ function DirectionArrow({ direction }: { direction?: Row["direction"] }) {
       {long ? "▲" : "▼"}
     </span>
   );
+}
+
+function ObservationTimes({ row }: { row: Row }) {
+  const timing = pumpTimingDisplay(row);
+  const strong = row.direction?.direction === "long" && row.direction.strength === "forte";
+  return <div className={styles.observationTimes} aria-label="Horários de observação — Brasília">
+    <div title={timing.entryTitle}>{timing.entryLabel}: <span>{timing.entry}</span></div>
+    <div title={timing.strongTitle} className={strong && row.last_strong_long_at && row.timing_status === "available" ? styles.green : undefined}>
+      Última força alta: <span>{timing.strong}</span>
+    </div>
+  </div>;
 }
 
 export default function PumpMonitorPage() {
@@ -298,6 +310,7 @@ function LegacyPumpMonitorPage() {
           <RefreshCw size={14} /> Atualizar
         </button>
         <span className={styles.status} role="status">
+          <span>Horários: Brasília</span>
           {age === null ? "sem ciclo ainda" : <>atualizado há {age}s{isStale && <span className={styles.stale}> · dado velho</span>}</>}
           {data && <span>{data.rows.length}/{data.total_assets} ativos · config v{data.config_version}</span>}
         </span>
@@ -350,6 +363,7 @@ function LegacyPumpMonitorPage() {
                   <tr key={row.symbol}>
                     <td className={styles.symbol} title={row.collection_error ? `falha na coleta: ${row.collection_error}` : undefined}>
                       <DirectionArrow direction={row.direction} />{row.symbol}
+                      <ObservationTimes row={row} />
                     </td>
                     {grouped.flatMap(g => g.keys).map(k => {
                       const cell = row.indicators[k];
