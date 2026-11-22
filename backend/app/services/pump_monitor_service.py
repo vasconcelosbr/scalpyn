@@ -25,12 +25,30 @@ from . import pump_monitor_engine as eng
 from . import pump_research as research
 from . import pump_score_v1 as v1
 from .pump_universe import select_universe
+from . import pump_monitor_timing as timing
 
 logger = logging.getLogger(__name__)
 
 CONFIG_TYPE = "pump_monitor"
 _LATEST_KEY = "pump_monitor:latest:{user_id}"
 _STATE_KEY = "pump_monitor:state:{user_id}"
+
+# A slower, older worker must not replace newer timestamps after both database
+# transactions have committed. Publish the envelope and its state atomically.
+_PUBLISH_CYCLE = """
+local current = redis.call('GET', KEYS[1])
+if current then
+    local ok, previous = pcall(cjson.decode, current)
+    local incoming = cjson.decode(ARGV[1])
+    if ok and type(previous) == 'table' and type(previous.generated_at) == 'string'
+        and previous.generated_at > incoming.generated_at then
+        return 0
+    end
+end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
+redis.call('SET', KEYS[2], ARGV[3], 'EX', ARGV[4])
+return 1
+"""
 
 
 def _now_ms() -> int:
@@ -661,6 +679,22 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     capital = (v1_out.get("regime") or {}).get("capital")
     apply_engines(rows, v1_out, engine, v1_spec)
 
+    # Durable timestamps use the final displayed arrow, including ML adjustments.
+    # Keep this transaction independent: migration/storage failure must not break
+    # the classic monitor or pretend that an event happened at request time.
+    try:
+        observed_timing = await run_db_task(lambda db: timing.record_cycle(
+            db, user_id, pool_id, rows,
+            cycle_at=datetime.fromtimestamp(now_ms / 1000.0, tz=timezone.utc),
+            candidates=candidates, market_caps=market_caps), celery=True)
+        if observed_timing is None:
+            return {"user_id": str(user_id), "status": "superseded_cycle"}
+    except Exception as exc:
+        logger.warning("[PUMP-TIMING] persistence unavailable user=%s reason=%s", user_id, type(exc).__name__)
+        observed_timing = {}
+    for row in rows:
+        row.update(observed_timing.get(row["symbol"]) or timing.unavailable_timing())
+
     for row in rows:
         if not research_due:
             break
@@ -768,10 +802,10 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     if redis is not None:
         try:
             ttl = int(config["cycle_seconds"]) * 10
-            await redis.set(_LATEST_KEY.format(user_id=user_id), json.dumps(envelope), ex=ttl)
             state.update(breakout=breakout_state, alerts=alert_state, cycle_index=cycle_index,
                          score_v1=v1_state)
-            await redis.set(state_key, json.dumps(state), ex=86_400)
+            await redis.eval(_PUBLISH_CYCLE, 2, _LATEST_KEY.format(user_id=user_id), state_key,
+                             json.dumps(envelope), ttl, json.dumps(state), 86_400)
         except Exception as exc:
             logger.warning("[PUMP-MONITOR] redis write failed: %s", exc)
 
@@ -881,6 +915,7 @@ def apply_engines(rows: List[Dict[str, Any]], v1_out: Dict[str, Any], engine: st
 
 def _compact(row: Dict[str, Any]) -> Dict[str, Any]:
     return {
+        **{key: row.get(key) for key in timing.TIMING_FIELDS},
         "symbol": row["symbol"], "score": row["pump_monitor_score"],
         "score_confidence": row["score_confidence"], "only_rising": row["only_rising"],
         "values": {k: c.get("value") for k, c in row["indicators"].items()},

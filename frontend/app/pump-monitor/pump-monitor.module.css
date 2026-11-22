@@ -24,6 +24,8 @@
 .headRow th { top: 26px; }
 .symbol { position: sticky; left: 0; z-index: 1; text-align: left !important; background: #0f1c2e; font-family: inherit !important; font-weight: 700; color: #e8eef8; }
 .table th.symbol { z-index: 3; }
+.observationTimes { margin-top: 4px; display: grid; gap: 2px; color: #8fa4c2; font-size: 10px; font-weight: 400; line-height: 1.5; }
+.observationTimes span { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
 .green { color: #59ddb0; }
 .amber { color: #f4bd3f; }
 .red { color: #ff7a7a; }
