@@ -47,6 +47,7 @@ async def history_members(db, uid, wid):
 
 
 def snapshot(data, member, cfg, history_cfg, scheduled_at):
+    from .mtf_replay import freeze_inputs
     analysis = data['analysis']
     observed = utc(data.get('captured_at') or analysis['observed_at_utc'])
     indicators, frames = [], {}
@@ -64,7 +65,7 @@ def snapshot(data, member, cfg, history_cfg, scheduled_at):
             indicators.append(dict(name=name, timeframe=tf, value=point.get('value') if point else None,
                 candle_open_at=utc(point['time']).isoformat() if point else None,
                 source_at=source_at.isoformat() if source_at else None, age_seconds=age,
-                quality='missing' if point is None else 'stale' if age > cfg.stale_tf_multiplier*chart.TF_SECONDS[tf] else 'current',
+                quality='missing' if point is None else 'invalid_time' if age < 0 else 'stale' if age > cfg.stale_tf_multiplier*chart.TF_SECONDS[tf] else 'current',
                 source='gate.io', producer='mtf_chart', role='structural_display_only' if display else 'available_to_evaluation',
                 configuration=display['configuration'] if display else data.get('indicator_config'),
                 configuration_identity={'version': display['version'], 'sample_count': display['sample_count']}
@@ -87,6 +88,7 @@ def snapshot(data, member, cfg, history_cfg, scheduled_at):
         analysis=analysis, profile_config=data.get('profile_config'), engine_config=cfg.model_dump(),
         history_config=history_cfg.model_dump(), membership=json.loads(serial(member)),
         indicators=indicators, frames=frames, market_context=data.get('market_context'),
+        replay_inputs=freeze_inputs(data, cfg) if analysis.get('evaluated_at_utc') else None,
         observed_price=price, price_source_at=None,
         price_received_at=price_time.isoformat() if price_time else None,
         price_source='gate.io/ticker', price_timestamp_kind='local_response_receipt; exchange_event_timestamp_unavailable',

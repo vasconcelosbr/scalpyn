@@ -33,13 +33,16 @@ def _closed_candles(
     if "time" not in frame.columns:
         return frame.reset_index(drop=True)
 
-    timestamps = pd.to_datetime(frame["time"], utc=True, errors="coerce")
+    timestamps = pd.to_datetime(frame["time"], utc=True, errors="coerce",
+                                **({'unit': 's'} if pd.api.types.is_numeric_dtype(frame['time']) else {}))
     cutoff = pd.Timestamp(as_of or datetime.now(timezone.utc))
     if cutoff.tzinfo is None:
         cutoff = cutoff.tz_localize("UTC")
     else:
         cutoff = cutoff.tz_convert("UTC")
     completed = timestamps + pd.Timedelta(minutes=timeframe_minutes) <= cutoff
+    if 'is_closed' in frame:
+        completed &= frame['is_closed'].ne(False)
     frame = frame.loc[completed & timestamps.notna()].copy()
     frame["_timestamp"] = timestamps.loc[frame.index]
     return frame.sort_values("_timestamp").reset_index(drop=True)
@@ -117,7 +120,9 @@ def calculate_price_position(
         "recent_low_15m_distance_pct",
         "price_change_1m_pct", "price_change_5m_pct", "price_change_15m_pct",
     ]
-    result: Dict[str, Any] = {name: None for name in metric_names}
+    from .indicator_temporal import IndicatorResults
+    result = IndicatorResults()
+    result.update({name: None for name in metric_names})
 
     closed_5m = _closed_candles(df_5m, timeframe_minutes=5, as_of=as_of)
     if closed_5m.empty:
@@ -128,22 +133,28 @@ def calculate_price_position(
     if base_close is None:
         return result
 
+    def distance(name, reference):
+        result[name] = _distance_pct(base_close, reference)
+        result.key_metadata[name] = {'base_close': base_close,
+            'reference_value': _finite_positive(reference), 'distance_unit': 'percent',
+            'formula': '(base_close / reference_value - 1) * 100'}
+
     for period in (5, 9, 21, 50, 200):
         if len(closes) < period:
             continue
         ema = closes.ewm(span=period, adjust=False).mean().iloc[-1]
-        result[f"ema{period}_distance_pct"] = _distance_pct(base_close, ema)
+        distance(f"ema{period}_distance_pct", ema)
 
     vwap = _daily_vwap(closed_5m)
-    result["vwap_distance_pct"] = _distance_pct(base_close, vwap)
+    distance("vwap_distance_pct", vwap)
 
     if bollinger_period > 0 and len(closes) >= bollinger_period:
         middle = closes.rolling(window=bollinger_period).mean().iloc[-1]
         std = closes.rolling(window=bollinger_period).std(ddof=0).iloc[-1]
         if pd.notna(middle) and pd.notna(std):
-            result["bb_upper_distance_pct"] = _distance_pct(base_close, middle + bollinger_deviation * std)
-            result["bb_middle_distance_pct"] = _distance_pct(base_close, middle)
-            result["bb_lower_distance_pct"] = _distance_pct(base_close, middle - bollinger_deviation * std)
+            distance("bb_upper_distance_pct", middle + bollinger_deviation * std)
+            distance("bb_middle_distance_pct", middle)
+            distance("bb_lower_distance_pct", middle - bollinger_deviation * std)
 
     prior = closed_5m.iloc[:-1]
     for window, bars in RECENT_HIGH_WINDOWS.items():
@@ -160,7 +171,7 @@ def calculate_price_position(
         level = _finite_positive(row.get("high"))
         result[f"{key}_level"] = level
         result[f"{key}_reference_time"] = _reference_time(row)
-        result[f"{key}_distance_pct"] = _distance_pct(base_close, level)
+        distance(f"{key}_distance_pct", level)
 
     result["recent_low_15m_level"] = None
     result["recent_low_15m_reference_time"] = None
@@ -172,7 +183,7 @@ def calculate_price_position(
             level = _finite_positive(row.get("low"))
             result["recent_low_15m_level"] = level
             result["recent_low_15m_reference_time"] = _reference_time(row)
-            result["recent_low_15m_distance_pct"] = _distance_pct(base_close, level)
+            distance("recent_low_15m_distance_pct", level)
 
     if len(closes) >= 2:
         result["price_change_5m_pct"] = _distance_pct(base_close, closes.iloc[-2])

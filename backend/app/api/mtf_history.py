@@ -84,4 +84,9 @@ async def observation(oid:UUID,response:Response,db=Depends(get_db),uid=Depends(
     response.headers['Cache-Control']='private, no-store'
     result=await service.detail(db,uid,oid)
     if result is None: raise HTTPException(404,'OBSERVATION_NOT_FOUND')
+    from ..services.mtf_replay import replay
+    try:
+        result['decision_replay'] = replay(result['payload'])
+    except (ValueError, KeyError, TypeError, IndexError):
+        result['decision_replay'] = {'status': 'INVALID', 'reason': 'INVALID_REPLAY_INPUTS'}
     return result

@@ -276,6 +276,8 @@ async def chart_data_v3(db, uid, symbol, profile_id, cfg, include_display):
         ),
     }
     if not include_display:
+        data['rule_series'] = series
+        data['replay_evaluated_at'] = now
         return data
     for tf, frame in frames.items():
         frame["zones"] = (

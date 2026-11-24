@@ -42,96 +42,329 @@
       "id": "pump-strong-readonly-export",
       "description": "Dedicated machine key exports all final strong-long arrows from the complete cycle, without writes or engine execution.",
       "files": [
-        {"path": "backend/app/services/pump_readonly.py", "contains_all": ["PUMP_STRONG_READONLY", "complete_cycle_unavailable", "config_changed_waiting_for_cycle"]},
-        {"path": "backend/app/api/pump_readonly.py", "contains_all": ["PUMP_READONLY_KEY_SHA256", "hmac.compare_digest", "readonly_session()", "/strong-rising/assets"]},
-        {"path": "backend/app/main.py", "contains_all": ["app.include_router(pump_readonly.router)"]},
-        {"path": "backend/tests/test_pump_readonly.py", "contains_all": ["test_export_matches_display_and_reads_only", "test_all_strong_rows_even_outside_top_and_only_rising_filter", "test_revocation_and_key_does_not_authorize_existing_routes"]}
+        {
+          "path": "backend/app/services/pump_readonly.py",
+          "contains_all": [
+            "PUMP_STRONG_READONLY",
+            "complete_cycle_unavailable",
+            "config_changed_waiting_for_cycle"
+          ]
+        },
+        {
+          "path": "backend/app/api/pump_readonly.py",
+          "contains_all": [
+            "PUMP_READONLY_KEY_SHA256",
+            "hmac.compare_digest",
+            "readonly_session()",
+            "/strong-rising/assets"
+          ]
+        },
+        {
+          "path": "backend/app/main.py",
+          "contains_all": [
+            "app.include_router(pump_readonly.router)"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_readonly.py",
+          "contains_all": [
+            "test_export_matches_display_and_reads_only",
+            "test_all_strong_rows_even_outside_top_and_only_rising_filter",
+            "test_revocation_and_key_does_not_authorize_existing_routes"
+          ]
+        }
       ]
     },
     {
       "id": "mtf-latest-observation-narrow-selection",
       "description": "Select latest observation IDs before JSON extraction while retaining post-quote eligibility and expiry guards.",
       "files": [
-        {"path": "backend/app/services/l3_armed_observation.py", "contains_all": ["MTF_LATEST_IDS_FIRST", "WITH latest AS MATERIALIZED", "o.payload->'analysis'"]},
-        {"path": "backend/tests/test_l3_armed_observation.py", "contains_all": ["assert new==old", "EXPLAIN (VERBOSE,FORMAT JSON)", "'payload' not in expr"]},
-        {"path": "backend/tests/test_shadow_consolidated_armed.py", "contains_all": ["test_observation_losing_eligibility_during_quote_cannot_insert", "test_quote_expiring_during_final_revalidation_cannot_insert"]},
-        {"path": "backend/app/services/shadow_trade_service.py", "contains_all": ["await current_observation", "require_current_quote("]},
-        {"path": "backend/app/services/shadow_entry_quote.py", "contains_all": ["ENTRY_QUOTE_EXPIRED_BEFORE_INSERT"]}
+        {
+          "path": "backend/app/services/l3_armed_observation.py",
+          "contains_all": [
+            "MTF_LATEST_IDS_FIRST",
+            "WITH latest AS MATERIALIZED",
+            "o.payload->'analysis'"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_armed_observation.py",
+          "contains_all": [
+            "assert new==old",
+            "EXPLAIN (VERBOSE,FORMAT JSON)",
+            "'payload' not in expr"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_consolidated_armed.py",
+          "contains_all": [
+            "test_observation_losing_eligibility_during_quote_cannot_insert",
+            "test_quote_expiring_during_final_revalidation_cannot_insert"
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "await current_observation",
+            "require_current_quote("
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_entry_quote.py",
+          "contains_all": [
+            "ENTRY_QUOTE_EXPIRED_BEFORE_INSERT"
+          ]
+        }
       ]
     },
     {
       "id": "mtf-btc-configurable-timeframe",
       "description": "Legacy 4H identity, configurable BTC veto timeframe and both frozen structural contexts.",
       "files": [
-        {"path": "backend/app/schemas/mtf_chart.py", "contains_all": ["MTF_BTC_TIMEFRAME_V1", "btc_trend_timeframe"]},
-        {"path": "backend/app/services/mtf_btc_context.py", "contains_all": ["mtf_btc_context_v1", "pivots_used", "active_timeframe"]},
-        {"path": "backend/app/services/mtf_chart_service.py", "contains_all": ["load_btc_context", "analysis[\"btc_context\"]"]},
-        {"path": "backend/tests/test_mtf_btc_timeframe.py", "contains_all": ["test_hourly_selection_changes_only_btc_gate", "test_legacy_identity_l3_validation_and_configuration_rollback"]},
-        {"path": "frontend/components/mtf/MTFSettingsDialog.tsx", "contains_all": ["btc_trend_timeframe"]},
-        {"path": "frontend/lib/mtfBtcTimeframe.test.ts", "contains_all": ["both frozen BTC states", "legacy BTC reading"]}
+        {
+          "path": "backend/app/schemas/mtf_chart.py",
+          "contains_all": [
+            "MTF_BTC_TIMEFRAME_V1",
+            "btc_trend_timeframe"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_btc_context.py",
+          "contains_all": [
+            "mtf_btc_context_v1",
+            "pivots_used",
+            "active_timeframe"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_chart_service.py",
+          "contains_all": [
+            "load_btc_context",
+            "analysis[\"btc_context\"]"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_btc_timeframe.py",
+          "contains_all": [
+            "test_hourly_selection_changes_only_btc_gate",
+            "test_legacy_identity_l3_validation_and_configuration_rollback"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFSettingsDialog.tsx",
+          "contains_all": [
+            "btc_trend_timeframe"
+          ]
+        },
+        {
+          "path": "frontend/lib/mtfBtcTimeframe.test.ts",
+          "contains_all": [
+            "both frozen BTC states",
+            "legacy BTC reading"
+          ]
+        }
       ]
     },
     {
       "id": "mtf-observer-structural-display-indicators",
       "description": "New history snapshots add the structural EMA after evaluation, with separate display provenance and legacy observation compatibility.",
       "files": [
-        { "path": "backend/app/services/mtf_history.py", "contains_all": ["enrich_observer_frames(data)", "structural_display_only"] },
-        { "path": "backend/app/services/mtf_structure_indicators.py", "contains_all": ["mtf_structure_indicators_v1", "STRUCTURE_REQUIRED_INDICATORS", "indicator_sample_count"] },
-        { "path": "backend/tests/test_mtf_structure_indicators.py", "contains_all": ["test_observer_enrichment_preserves_entire_decision_and_snapshot_identity", "test_old_observation_without_ema_passes_l3_validation_and_projection", "test_capture_persists_structural_ema_for_profile_without_ema"] }
+        {
+          "path": "backend/app/services/mtf_history.py",
+          "contains_all": [
+            "enrich_observer_frames(data)",
+            "structural_display_only"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_structure_indicators.py",
+          "contains_all": [
+            "mtf_structure_indicators_v1",
+            "STRUCTURE_REQUIRED_INDICATORS",
+            "indicator_sample_count"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_structure_indicators.py",
+          "contains_all": [
+            "test_observer_enrichment_preserves_entire_decision_and_snapshot_identity",
+            "test_old_observation_without_ema_passes_l3_validation_and_projection",
+            "test_capture_persists_structural_ema_for_profile_without_ema"
+          ]
+        }
       ]
     },
     {
       "id": "l3-chart-profile-display-parity",
       "description": "Consolidated chart membership ignores Shadow capacity and uses the same validated reference observation as the ARMED feed.",
       "files": [
-        { "path": "backend/app/api/mtf_chart.py", "contains_all": ["L3_CHART_PROFILE_DISPLAY_PARITY", "include_analysis=True", "service.display_members"] },
-        { "path": "backend/tests/test_mtf_chart_api.py", "contains_all": ["test_consolidated_chart_shares_armed_observation_without_shadow_cap", "test_display_members_include_approved_assets_outside_shadow"] },
-        { "path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["watchlist !== 'l3-consolidated' && a.symbol === data?.symbol"] }
+        {
+          "path": "backend/app/api/mtf_chart.py",
+          "contains_all": [
+            "L3_CHART_PROFILE_DISPLAY_PARITY",
+            "include_analysis=True",
+            "service.display_members"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_chart_api.py",
+          "contains_all": [
+            "test_consolidated_chart_shares_armed_observation_without_shadow_cap",
+            "test_display_members_include_approved_assets_outside_shadow"
+          ]
+        },
+        {
+          "path": "frontend/app/grafico-mtf/page.tsx",
+          "contains_all": [
+            "watchlist !== 'l3-consolidated' && a.symbol === data?.symbol"
+          ]
+        }
       ]
     },
     {
       "id": "profile-display-narrow-latest-selection",
       "description": "Latest decision IDs are selected before historical JSON evidence is extracted, preserving profile rules and external ARMED semantics.",
       "files": [
-        { "path": "backend/app/services/profile_display_status.py", "contains_all": ["PROFILE_DISPLAY_LATEST_IDS_FIRST", "latest_profile_decision_ids", "join(latest_ids, DecisionLog.id == latest_ids.c.id)"] },
-        { "path": "backend/tests/test_profile_display_query_postgres.py", "contains_all": ["test_latest_decisions_match_legacy_without_sorting_historical_json", "EXPLAIN (VERBOSE,FORMAT JSON)", "assert new==old"] }
+        {
+          "path": "backend/app/services/profile_display_status.py",
+          "contains_all": [
+            "PROFILE_DISPLAY_LATEST_IDS_FIRST",
+            "latest_profile_decision_ids",
+            "join(latest_ids, DecisionLog.id == latest_ids.c.id)"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_display_query_postgres.py",
+          "contains_all": [
+            "test_latest_decisions_match_legacy_without_sorting_historical_json",
+            "EXPLAIN (VERBOSE,FORMAT JSON)",
+            "assert new==old"
+          ]
+        }
       ]
     },
     {
       "id": "l3-triggered-observation-feed",
       "description": "Existing consolidated URL exposes only fresh reference-profile TRIGGERED observations; internal ARMED membership remains unchanged and orders stay unauthorized.",
       "files": [
-        { "path": "backend/app/services/l3_armed_observation.py", "contains_all": ["L3_TRIGGERED_OBSERVATION_V1", "load_l3_armed_display", "REFERENCE_PROFILE_CHANGED", "execution_authority=False"] },
-        { "path": "backend/app/api/watchlists.py", "contains_all": ["/l3-consolidated/assets", "load_l3_triggered_assets", "load_l3_internal_candidates"] },
-        { "path": "backend/app/services/mtf_chart_service.py", "contains_all": ["await load_l3_internal_candidates(user_id=user_id, db=db)"] },
-        { "path": "frontend/app/watchlist/page.tsx", "contains_all": ["['watchlist', 'approved', 'awaiting_data']", "data?.armed_items", "Estado MTF"] },
-        { "path": "backend/tests/test_l3_armed_observation.py", "contains_all": ["test_real_database_latest_reference_and_full_universe", "test_external_feed_selects_only_current_triggers", "test_internal_observer_never_calls_filtered_external_feed", "test_existing_external_url_is_authenticated_read_only"] }
+        {
+          "path": "backend/app/services/l3_armed_observation.py",
+          "contains_all": [
+            "L3_TRIGGERED_OBSERVATION_V1",
+            "load_l3_armed_display",
+            "REFERENCE_PROFILE_CHANGED",
+            "execution_authority=False"
+          ]
+        },
+        {
+          "path": "backend/app/api/watchlists.py",
+          "contains_all": [
+            "/l3-consolidated/assets",
+            "load_l3_triggered_assets",
+            "load_l3_internal_candidates"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_chart_service.py",
+          "contains_all": [
+            "await load_l3_internal_candidates(user_id=user_id, db=db)"
+          ]
+        },
+        {
+          "path": "frontend/app/watchlist/page.tsx",
+          "contains_all": [
+            "['watchlist', 'approved', 'awaiting_data']",
+            "data?.armed_items",
+            "Estado MTF"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_armed_observation.py",
+          "contains_all": [
+            "test_real_database_latest_reference_and_full_universe",
+            "test_external_feed_selects_only_current_triggers",
+            "test_internal_observer_never_calls_filtered_external_feed",
+            "test_existing_external_url_is_authenticated_read_only"
+          ]
+        }
       ]
     },
     {
       "id": "immutable-mtf-observation-history",
       "description": "Full profile display universe, immutable inputs, separate future labels and dedicated observation queue.",
       "files": [
-        {"path": "backend/app/services/mtf_history.py", "contains_all": ["history_members", "POST_OBSERVATION_CANDLE_GAP", "context_only"]},
-        {"path": "backend/app/tasks/celery_app.py", "contains_all": ["mtf_history requires a dedicated worker"]},
-        {"path": "backend/tests/test_mtf_history.py", "contains_all": ["test_capture_idempotence_history_removal_isolation_and_exports", "test_future_labels_exclude_pre_observation_and_detect_gaps"]},
-        {"path": "frontend/app/grafico-mtf/historico/page.tsx", "contains_all": ["Histórico de observações", "Exportar CSV ZIP"]}
+        {
+          "path": "backend/app/services/mtf_history.py",
+          "contains_all": [
+            "history_members",
+            "POST_OBSERVATION_CANDLE_GAP",
+            "context_only"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/celery_app.py",
+          "contains_all": [
+            "mtf_history requires a dedicated worker"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_history.py",
+          "contains_all": [
+            "test_capture_idempotence_history_removal_isolation_and_exports",
+            "test_future_labels_exclude_pre_observation_and_detect_gaps"
+          ]
+        },
+        {
+          "path": "frontend/app/grafico-mtf/historico/page.tsx",
+          "contains_all": [
+            "Histórico de observações",
+            "Exportar CSV ZIP"
+          ]
+        }
       ]
     },
     {
       "id": "profile-refresh-with-flow-pending",
       "description": "Fresh configured candle rules remain audited when operational flow is pending, with execution and Shadow still blocked.",
       "files": [
-        {"path": "backend/app/tasks/pipeline_scan.py", "contains_all": ["PROFILE_REFRESH_WITH_FLOW_PENDING", "LIVE_ORDER_FLOW_PENDING", "operational_flow_pending"]},
-        {"path": "backend/tests/test_profile_refresh_flow_pending.py", "contains_all": ["test_profile_refreshes_without_authorizing_stale_operational_flow", "contract_authorizes_shadow_capture", "public_authorization"]}
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "PROFILE_REFRESH_WITH_FLOW_PENDING",
+            "LIVE_ORDER_FLOW_PENDING",
+            "operational_flow_pending"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_refresh_flow_pending.py",
+          "contains_all": [
+            "test_profile_refreshes_without_authorizing_stale_operational_flow",
+            "contract_authorizes_shadow_capture",
+            "public_authorization"
+          ]
+        }
       ]
     },
     {
       "id": "m5-freshness-isolation",
       "description": "Closed M5 indicator publication stays isolated from long MTF/Shadow tasks; capture polling follows wall-clock minute boundaries.",
       "files": [
-        {"path": "backend/app/tasks/celery_app.py", "contains_all": ["M5_FRESHNESS_ISOLATION", "QUEUE_INDICATOR_5M", "indicator_5m requires a dedicated worker"]},
-        {"path": "backend/tests/test_m5_freshness_isolation.py", "contains_all": ["test_m5_publishers_are_isolated_from_slow_observers", "test_m5_worker_rejects_shared_consumers", "test_capture_poll_is_aligned_independently_of_beat_startup"]}
+        {
+          "path": "backend/app/tasks/celery_app.py",
+          "contains_all": [
+            "M5_FRESHNESS_ISOLATION",
+            "QUEUE_INDICATOR_5M",
+            "indicator_5m requires a dedicated worker"
+          ]
+        },
+        {
+          "path": "backend/tests/test_m5_freshness_isolation.py",
+          "contains_all": [
+            "test_m5_publishers_are_isolated_from_slow_observers",
+            "test_m5_worker_rejects_shared_consumers",
+            "test_capture_poll_is_aligned_independently_of_beat_startup"
+          ]
+        }
       ]
     },
     {
@@ -140,7 +373,10 @@
       "files": [
         {
           "path": "backend/app/api/watchlists.py",
-          "contains_all": ["L3_PROFILE_SUMMARY_COUNTS", "load_l3_profile_summary_counts"]
+          "contains_all": [
+            "L3_PROFILE_SUMMARY_COUNTS",
+            "load_l3_profile_summary_counts"
+          ]
         },
         {
           "path": "backend/app/services/l3_profile_consolidation.py",
@@ -192,7 +428,10 @@
         },
         {
           "path": "frontend/lib/profileDisplayStatus.test.ts",
-          "contains_all": ["stale data renders its own state", "profile rejection does not invent a global flow restriction"]
+          "contains_all": [
+            "stale data renders its own state",
+            "profile rejection does not invent a global flow restriction"
+          ]
         },
         {
           "path": "frontend/app/watchlist/page.tsx",
@@ -208,56 +447,216 @@
       "id": "l3-shadow-suppression-reason",
       "description": "Required Shadow dispatch never claims NO_SHADOW_REQUIRED; hourly uniqueness stays enforced and observable",
       "files": [
-        {"path":"backend/app/services/l3_authorization_outbox_service.py","contains_all":["L3_SHADOW_SUPPRESSION_REASON","SUPPRESSED/PROFILE_SYMBOL_HOURLY_LIMIT"]},
-        {"path":"backend/tests/test_l3_authorization_outbox_v3.py","contains_all":["test_required_shadow_never_reports_not_required","test_hourly_limit_matches_database_key_even_after_trade_closes"]},
-        {"path":"backend/tests/test_l3_public_authorization.py","contains_all":["test_suppressed_required_shadow_is_visible_but_never_confirmed"]}
+        {
+          "path": "backend/app/services/l3_authorization_outbox_service.py",
+          "contains_all": [
+            "L3_SHADOW_SUPPRESSION_REASON",
+            "SUPPRESSED/PROFILE_SYMBOL_HOURLY_LIMIT"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_authorization_outbox_v3.py",
+          "contains_all": [
+            "test_required_shadow_never_reports_not_required",
+            "test_hourly_limit_matches_database_key_even_after_trade_closes"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_public_authorization.py",
+          "contains_all": [
+            "test_suppressed_required_shadow_is_visible_but_never_confirmed"
+          ]
+        }
       ]
     },
     {
       "id": "l3-stable-allow-shadow-route",
       "description": "Stable valid L3 evaluations retain their idempotent Shadow route independently of audit edge dedup",
       "files": [
-        {"path":"backend/app/tasks/pipeline_scan.py","contains_all":["L3_STABLE_ALLOW_SHADOW_ROUTE"]},
-        {"path":"backend/tests/test_l3_stable_allow_shadow.py","contains_all":["test_stable_allow_keeps_shadow_route_and_public_visibility","test_stable_scan_never_routes_failed_public_authorization"]}
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "L3_STABLE_ALLOW_SHADOW_ROUTE"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_stable_allow_shadow.py",
+          "contains_all": [
+            "test_stable_allow_keeps_shadow_route_and_public_visibility",
+            "test_stable_scan_never_routes_failed_public_authorization"
+          ]
+        }
       ]
     },
     {
       "id": "recovery-m5-shadow-order-isolation",
       "description": "Opt-in M5 collection and Shadow recovery require observation mode; Gate writes are blocked before network access",
       "files": [
-        {"path":"backend/scripts/run_observation_beat.py","contains_all":["RECOVERY_M5_SHADOW_SCHEDULE","RECOVERY_OBSERVATION_ONLY","M5_SHADOW_ALLOWED","collect_state_5m_every_60s"]},
-        {"path":"backend/app/services/canonical_indicator_config.py","contains_all":["CANONICAL_INDICATOR_CONFIG_SELECTOR","INDICATOR_CONFIG_CARDINALITY_INVALID"]},
-        {"path":"backend/app/tasks/compute_indicators.py","contains_all":["M5_CLOSED_SOURCE_CLOCK","**closed_5m_source_clock(rows[0].time)","compute_structural_5m_v3"]},
-        {"path":"backend/tests/test_m5_closed_source_clock.py","contains_all":["test_closed_m5_ttl_reaches_shadow_without_renewing_old_candles","FEATURE_TTL_EXPIRED"]},
-        {"path":"backend/app/services/shadow_trade_service.py","contains_all":["SHADOW_STRUCTURAL_ATR","AND scheduler_group = 'structural'"]},
-        {"path":"backend/tests/test_shadow_structural_atr_postgres.py","contains_all":["test_newer_micro_row_cannot_mask_point_in_time_structural_atr"]},
-        {"path":"backend/app/exchange_adapters/gate_adapter.py","contains_all":["RECOVERY_GATE_WRITE_BLOCK","Gate exchange writes are blocked"]},
-        {"path":"backend/tests/test_recovery_m5_shadow.py","contains_all":["test_recovery_blocks_exchange_writes_before_signing_or_network","test_recovery_schedule_requires_explicit_shadow_opt_in_and_order_block","test_canonical_indicator_selector_never_falls_back_to_another_user"]}
+        {
+          "path": "backend/scripts/run_observation_beat.py",
+          "contains_all": [
+            "RECOVERY_M5_SHADOW_SCHEDULE",
+            "RECOVERY_OBSERVATION_ONLY",
+            "M5_SHADOW_ALLOWED",
+            "collect_state_5m_every_60s"
+          ]
+        },
+        {
+          "path": "backend/app/services/canonical_indicator_config.py",
+          "contains_all": [
+            "CANONICAL_INDICATOR_CONFIG_SELECTOR",
+            "INDICATOR_CONFIG_CARDINALITY_INVALID"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/compute_indicators.py",
+          "contains_all": [
+            "M5_CLOSED_SOURCE_CLOCK",
+            "**closed_5m_source_clock(rows[0].time)",
+            "compute_structural_5m_v3"
+          ]
+        },
+        {
+          "path": "backend/tests/test_m5_closed_source_clock.py",
+          "contains_all": [
+            "test_closed_m5_ttl_reaches_shadow_without_renewing_old_candles",
+            "FEATURE_TTL_EXPIRED"
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "SHADOW_STRUCTURAL_ATR",
+            "AND scheduler_group = 'structural'"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_structural_atr_postgres.py",
+          "contains_all": [
+            "test_newer_micro_row_cannot_mask_point_in_time_structural_atr"
+          ]
+        },
+        {
+          "path": "backend/app/exchange_adapters/gate_adapter.py",
+          "contains_all": [
+            "RECOVERY_GATE_WRITE_BLOCK",
+            "Gate exchange writes are blocked"
+          ]
+        },
+        {
+          "path": "backend/tests/test_recovery_m5_shadow.py",
+          "contains_all": [
+            "test_recovery_blocks_exchange_writes_before_signing_or_network",
+            "test_recovery_schedule_requires_explicit_shadow_opt_in_and_order_block",
+            "test_canonical_indicator_selector_never_falls_back_to_another_user"
+          ]
+        }
       ]
     },
     {
       "id": "mtf-chart-observation-only",
       "description": "Gate MTF chart and append-only simulator remain separate from operational execution and training",
       "files": [
-        {"path":"frontend/app/grafico-mtf/page.tsx","contains_all":["MTFCandlestickChart","/mtf/bootstrap","NÃO CALIBRADO"]},
-        {"path":"frontend/app/watchlist/page.tsx","contains_all":["/grafico-mtf","Abrir Gráfico MTF"]},
-        {"path":"backend/app/services/mtf_chart_engine.py","contains_all":["\"operational_effect\": False","CANDLE_GAP","ZONE_INVALIDATED"]},
-        {"path":"backend/app/services/mtf_chart_service.py","contains_all":["mtf_chart_evaluations","gate_only=True","ON CONFLICT (identity) DO NOTHING"]},
-        {"path":"backend/tests/test_mtf_chart_engine.py","contains_all":["test_missing_data_no_authority","test_no_retroactive_fill_and_stop_first"]},
-        {"path":"backend/tests/test_mtf_recovery_gate.py","contains_all":["test_recovery_allows_only_observational_mtf_settings","/api/orders/"]},
-        {"path":"backend/scripts/run_observation_beat.py","contains_all":["mtf_chart_after_close","ALLOWED"]}
+        {
+          "path": "frontend/app/grafico-mtf/page.tsx",
+          "contains_all": [
+            "MTFCandlestickChart",
+            "/mtf/bootstrap",
+            "NÃO CALIBRADO"
+          ]
+        },
+        {
+          "path": "frontend/app/watchlist/page.tsx",
+          "contains_all": [
+            "/grafico-mtf",
+            "Abrir Gráfico MTF"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_chart_engine.py",
+          "contains_all": [
+            "\"operational_effect\": False",
+            "CANDLE_GAP",
+            "ZONE_INVALIDATED"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_chart_service.py",
+          "contains_all": [
+            "mtf_chart_evaluations",
+            "gate_only=True",
+            "ON CONFLICT (identity) DO NOTHING"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_chart_engine.py",
+          "contains_all": [
+            "test_missing_data_no_authority",
+            "test_no_retroactive_fill_and_stop_first"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_recovery_gate.py",
+          "contains_all": [
+            "test_recovery_allows_only_observational_mtf_settings",
+            "/api/orders/"
+          ]
+        },
+        {
+          "path": "backend/scripts/run_observation_beat.py",
+          "contains_all": [
+            "mtf_chart_after_close",
+            "ALLOWED"
+          ]
+        }
       ]
     },
     {
       "id": "profile-default-timeframe-h4",
       "description": "Explicit profile timeframe changes propagate to every candle condition, preserving live metadata and supporting closed Gate H4 inputs",
       "files": [
-        {"path": "frontend/lib/profileConditionState.ts", "contains_all": ["setProfileDefaultTimeframe", "defaultTimeframe || policy.timeframe"]},
-        {"path": "frontend/components/profiles/ProfileBuilder.tsx", "contains_all": ["setProfileDefaultTimeframe(c, e.target.value)", "4h (4 horas)"]},
-        {"path": "frontend/lib/profileDefaultTimeframe.test.ts", "contains_all": ["default selection updates all candle sections", "metadata, live windows and fixed reference windows remain unchanged"]},
-        {"path": "backend/app/services/block_condition_timeframe.py", "contains_all": ["PROFILE_ALL_CANDLE_TIMEFRAMES", "get_closed_profile_4h"]},
-        {"path": "backend/app/services/profile_candles_4h.py", "contains_all": ["profile_closed_gate_4h_v1", "CLOSED_ONLY"]},
-        {"path": "backend/tests/test_profile_default_timeframe.py", "contains_all": ["test_h4_profile_roundtrip_uses_exact_rsi_and_live_metadata", "test_all_sections_load_h4_before_scoring_and_preserve_live_data"]}
+        {
+          "path": "frontend/lib/profileConditionState.ts",
+          "contains_all": [
+            "setProfileDefaultTimeframe",
+            "defaultTimeframe || policy.timeframe"
+          ]
+        },
+        {
+          "path": "frontend/components/profiles/ProfileBuilder.tsx",
+          "contains_all": [
+            "setProfileDefaultTimeframe(c, e.target.value)",
+            "4h (4 horas)"
+          ]
+        },
+        {
+          "path": "frontend/lib/profileDefaultTimeframe.test.ts",
+          "contains_all": [
+            "default selection updates all candle sections",
+            "metadata, live windows and fixed reference windows remain unchanged"
+          ]
+        },
+        {
+          "path": "backend/app/services/block_condition_timeframe.py",
+          "contains_all": [
+            "PROFILE_ALL_CANDLE_TIMEFRAMES",
+            "get_closed_profile_4h"
+          ]
+        },
+        {
+          "path": "backend/app/services/profile_candles_4h.py",
+          "contains_all": [
+            "profile_closed_gate_4h_v1",
+            "CLOSED_ONLY"
+          ]
+        },
+        {
+          "path": "backend/tests/test_profile_default_timeframe.py",
+          "contains_all": [
+            "test_h4_profile_roundtrip_uses_exact_rsi_and_live_metadata",
+            "test_all_sections_load_h4_before_scoring_and_preserve_live_data"
+          ]
+        }
       ]
     },
     {
@@ -1902,19 +2301,98 @@
       "id": "l3-producer-identity-and-canonical-on-demand",
       "description": "Producer calculation identity, immutable book clocks and canonical on-demand authorization preserve strategy and expose capture exclusions.",
       "files": [
-        {"path": "backend/tests/test_l3_authorization_contract_v3.py", "contains_all": ["test_inline_block_threshold_matches_canonical_block_engine"]},
-        {"path": "backend/app/tasks/collect_research_ohlcv.py", "contains_all": ["CANONICAL-5m-COMPUTE", "result.get(\"canonical_read_enabled\") is True"]},
-        {"path": "backend/tests/test_research_ohlcv_pipeline.py", "contains_all": ["test_canonical_5m_refreshes_indicators_only_after_committed_rows"]},
-        {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_scheduled_scanner_preserves_configured_resolver_source_policies"]},
-        {"path": "backend/app/services/indicator_calculation_identity.py", "contains_all": ["def calculation_identities", "UTC_DAY"]},
-        {"path": "backend/app/services/l3_authorization_contract_v3.py", "contains_all": ["def _derived_candle_candidates", "registry.extend(_derived_candle_candidates(registry))"]},
-        {"path": "backend/app/services/l3_gate_compiler_v2.py", "contains_all": ["condition[\"field\"] = condition[\"indicator\"]"]},
-        {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_derived_provenance_requires_same_observation_and_keeps_window", "test_score_alias_reads_gate_score_and_keeps_threshold_block", "test_read_only_evaluation_cannot_persist_gate_or_mtf_state"]},
-        {"path": "backend/app/services/l3_capture_preflight.py", "contains_all": ["SET TRANSACTION READ ONLY", "read_only=True", "capture_created"]},
-        {"path": "backend/app/services/l3_on_demand_decisions.py", "contains_all": ["_evaluate_l3_decisions", "L3_ON_DEMAND_PROFILE_ID_MISMATCH"]},
-        {"path": "backend/app/api/watchlists.py", "contains_all": ["await evaluate_on_demand_l3", "L3_ON_DEMAND_EVALUATION_ENVELOPE_MISSING"]},
-        {"path": "backend/app/services/l3_capture_diagnostics.py", "contains_all": ["AWAITING_MATURITY", "eligible_ids", "source='L3'"]},
-        {"path": "backend/tests/test_l3_capture_preparation.py", "contains_all": ["test_on_demand_uses_canonical_evaluator_and_preserves_block", "test_metadata_repair_preserves_predicates_and_rejects_other_period_changes", "test_book_metadata_preserves_observation_clock_and_does_not_invent_it", "test_waiting_diagnosis_does_not_certify_immature_or_excluded_capture"]}
+        {
+          "path": "backend/tests/test_l3_authorization_contract_v3.py",
+          "contains_all": [
+            "test_inline_block_threshold_matches_canonical_block_engine"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/collect_research_ohlcv.py",
+          "contains_all": [
+            "CANONICAL-5m-COMPUTE",
+            "result.get(\"canonical_read_enabled\") is True"
+          ]
+        },
+        {
+          "path": "backend/tests/test_research_ohlcv_pipeline.py",
+          "contains_all": [
+            "test_canonical_5m_refreshes_indicators_only_after_committed_rows"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_capture_preparation.py",
+          "contains_all": [
+            "test_scheduled_scanner_preserves_configured_resolver_source_policies"
+          ]
+        },
+        {
+          "path": "backend/app/services/indicator_calculation_identity.py",
+          "contains_all": [
+            "def calculation_identities",
+            "UTC_DAY"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_authorization_contract_v3.py",
+          "contains_all": [
+            "def _derived_candle_candidates",
+            "registry.extend(_derived_candle_candidates(registry))"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_gate_compiler_v2.py",
+          "contains_all": [
+            "condition[\"field\"] = condition[\"indicator\"]"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_capture_preparation.py",
+          "contains_all": [
+            "test_derived_provenance_requires_same_observation_and_keeps_window",
+            "test_score_alias_reads_gate_score_and_keeps_threshold_block",
+            "test_read_only_evaluation_cannot_persist_gate_or_mtf_state"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_capture_preflight.py",
+          "contains_all": [
+            "SET TRANSACTION READ ONLY",
+            "read_only=True",
+            "capture_created"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_on_demand_decisions.py",
+          "contains_all": [
+            "_evaluate_l3_decisions",
+            "L3_ON_DEMAND_PROFILE_ID_MISMATCH"
+          ]
+        },
+        {
+          "path": "backend/app/api/watchlists.py",
+          "contains_all": [
+            "await evaluate_on_demand_l3",
+            "L3_ON_DEMAND_EVALUATION_ENVELOPE_MISSING"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_capture_diagnostics.py",
+          "contains_all": [
+            "AWAITING_MATURITY",
+            "eligible_ids",
+            "source='L3'"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_capture_preparation.py",
+          "contains_all": [
+            "test_on_demand_uses_canonical_evaluator_and_preserves_block",
+            "test_metadata_repair_preserves_predicates_and_rejects_other_period_changes",
+            "test_book_metadata_preserves_observation_clock_and_does_not_invent_it",
+            "test_waiting_diagnosis_does_not_certify_immature_or_excluded_capture"
+          ]
+        }
       ]
     },
     {
@@ -2132,7 +2610,11 @@
       "files": [
         {
           "path": "backend/app/services/config_service.py",
-          "contains_all": ["async def _cache_client(self)", "return await get_async_redis()", "else await self._cache_client()"]
+          "contains_all": [
+            "async def _cache_client(self)",
+            "return await get_async_redis()",
+            "else await self._cache_client()"
+          ]
         },
         {
           "path": "backend/app/services/redis_client.py",
@@ -2445,19 +2927,38 @@
       "files": [
         {
           "path": "backend/app/services/pump_opportunity_engine.py",
-          "contains_all": ["pump_opportunity_v2", "gate_best_ask_v1", "first_touch_censored", "SCORE_UNIT_MISMATCH", "no_validated_pump_model"]
+          "contains_all": [
+            "pump_opportunity_v2",
+            "gate_best_ask_v1",
+            "first_touch_censored",
+            "SCORE_UNIT_MISMATCH",
+            "no_validated_pump_model"
+          ]
         },
         {
           "path": "backend/app/services/pump_opportunity_service.py",
-          "contains_all": ["ON CONFLICT(user_id,instrument_id,slot_at) DO NOTHING", "user_id=:u AND observation_id=:id", "pending_support_symbols"]
+          "contains_all": [
+            "ON CONFLICT(user_id,instrument_id,slot_at) DO NOTHING",
+            "user_id=:u AND observation_id=:id",
+            "pending_support_symbols"
+          ]
         },
         {
           "path": "backend/tests/test_pump_opportunity.py",
-          "contains_all": ["test_T02_pre_decision_boundary_high_does_not_count", "test_T15_veto_beats_score_and_visual_hysteresis", "test_T26_flags_reject_unapproved_delta_or_pool_connection", "test_T29_hit_after_gap_first_touch_is_censored"]
+          "contains_all": [
+            "test_T02_pre_decision_boundary_high_does_not_count",
+            "test_T15_veto_beats_score_and_visual_hysteresis",
+            "test_T26_flags_reject_unapproved_delta_or_pool_connection",
+            "test_T29_hit_after_gap_first_touch_is_censored"
+          ]
         },
         {
           "path": "frontend/components/pump-monitor/PumpOpportunityPanel.tsx",
-          "contains_all": ["Referência selecionada", "Inteligência e qualidade", "ML em observação"]
+          "contains_all": [
+            "Referência selecionada",
+            "Inteligência e qualidade",
+            "ML em observação"
+          ]
         }
       ]
     },
@@ -2465,110 +2966,350 @@
       "id": "pump-exact-price-paths-neutral-ml-preparation",
       "description": "Owner-scoped raw trade paths resolve minute boundaries; Pump-only trainer remains unpromoted",
       "files": [
-        {"path":"backend/app/services/pump_opportunity_engine.py","contains_all":["def exact_gross_label(","def price_path(","ws_liveness_unavailable","price_point_budget_exceeded"]},
-        {"path":"backend/tests/test_pump_exact_price_paths.py","contains_all":["test_exact_window_excludes_predecision_and_postendpoint_highs","test_exact_hit_after_gap_is_true_but_first_time_censored","test_raw_ws_without_liveness_never_certifies_absence"]},
-        {"path":"backend/app/services/pump_ml_research.py","contains_all":["model.get_booster().save_model(","pump_ml/","applied_delta"]},
-        {"path":"deploy/pump-ml-worker.prepared.json","contains_all":["PREPARED_DISABLED","pump_ml","activation_blocker"]}
+        {
+          "path": "backend/app/services/pump_opportunity_engine.py",
+          "contains_all": [
+            "def exact_gross_label(",
+            "def price_path(",
+            "ws_liveness_unavailable",
+            "price_point_budget_exceeded"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_exact_price_paths.py",
+          "contains_all": [
+            "test_exact_window_excludes_predecision_and_postendpoint_highs",
+            "test_exact_hit_after_gap_is_true_but_first_time_censored",
+            "test_raw_ws_without_liveness_never_certifies_absence"
+          ]
+        },
+        {
+          "path": "backend/app/services/pump_ml_research.py",
+          "contains_all": [
+            "model.get_booster().save_model(",
+            "pump_ml/",
+            "applied_delta"
+          ]
+        },
+        {
+          "path": "deploy/pump-ml-worker.prepared.json",
+          "contains_all": [
+            "PREPARED_DISABLED",
+            "pump_ml",
+            "activation_blocker"
+          ]
+        }
       ]
     },
     {
-      "id":"pump-incremental-label-queue-and-frozen-contracts",
-      "description":"Pump bounded shared reads and immutable listing/feature/cost/temporal contracts; explicit risk and sample uncertainty",
-      "files":[
-        {"path":"backend/alembic/versions/233_pump_label_queue.py","contains_all":["ix_pump_label_due","ON CONFLICT DO NOTHING"]},
-        {"path":"backend/app/services/pump_opportunity_service.py","contains_all":["FIFO_PREFIX_SQL","WITH pending AS MATERIALIZED","admitted_observation_unavailable","accepted_count","individual_window_exceeds_read_budget","resource_block IS NULL","max_label_read_points","pg_try_advisory_xact_lock","UPDATE pump_opportunity_label_queue"]},
-        {"path":"backend/app/services/pump_label_reader.py","contains_all":["WITH RECURSIVE requests AS MATERIALIZED","w.n=w.accepted_count","jsonb_object_agg","admitted AS MATERIALIZED","b.n AS examined_count"]},
-        {"path":"backend/tests/test_pump_fifo_reader_sql.py","contains_all":["test_sql_fifo_prefix_matches_previous_reader","test_sql_never_costs_discarded_suffix","SET TRANSACTION READ ONLY"]},
-        {"path":"backend/alembic/versions/235_pump_label_resource_block.py","contains_all":["234_pump_ml_job_ledger","resource_block jsonb"]},
-        {"path":"backend/tests/test_pump_exact_price_paths.py","contains_all":["test_budget_prefix_only_completes_admitted_horizons","explicit_review_required"]},
-        {"path":"backend/app/services/pump_contracts.py","contains_all":["provider_listing_epoch_unavailable","Strict temporal cuts required","Frozen cost policy hash mismatch"]},
-        {"path":"backend/tests/test_pump_contracts.py","contains_all":["test_listing_zero_unknown_no_epoch_invention","test_frozen_manifest_rejects_incompatible_or_ambiguous_contracts"]},
-        {"path":"frontend/components/pump-monitor/PumpOpportunityPanel.tsx","contains_all":["Limites de risco não configurados","Suporte estatístico não validado","Rótulos vencidos na fila"]},
-        {"path":"pump_ml/Dockerfile","contains_all":["kill-after=5s","895s","OMP_NUM_THREADS=1"]},
-        {"path":"pump_ml/job.py","contains_all":["daily_already_recorded","pg_try_advisory_lock","pump_ml_artifacts","production_model_validated"]},
-        {"path":"backend/tests/test_pump_ml_daily_job.py","contains_all":["test_daily_singleton_and_missing_listing_stop_before_training","test_daily_job_cannot_train_micro_sample"]}
+      "id": "pump-incremental-label-queue-and-frozen-contracts",
+      "description": "Pump bounded shared reads and immutable listing/feature/cost/temporal contracts; explicit risk and sample uncertainty",
+      "files": [
+        {
+          "path": "backend/alembic/versions/233_pump_label_queue.py",
+          "contains_all": [
+            "ix_pump_label_due",
+            "ON CONFLICT DO NOTHING"
+          ]
+        },
+        {
+          "path": "backend/app/services/pump_opportunity_service.py",
+          "contains_all": [
+            "FIFO_PREFIX_SQL",
+            "WITH pending AS MATERIALIZED",
+            "admitted_observation_unavailable",
+            "accepted_count",
+            "individual_window_exceeds_read_budget",
+            "resource_block IS NULL",
+            "max_label_read_points",
+            "pg_try_advisory_xact_lock",
+            "UPDATE pump_opportunity_label_queue"
+          ]
+        },
+        {
+          "path": "backend/app/services/pump_label_reader.py",
+          "contains_all": [
+            "WITH RECURSIVE requests AS MATERIALIZED",
+            "w.n=w.accepted_count",
+            "jsonb_object_agg",
+            "admitted AS MATERIALIZED",
+            "b.n AS examined_count"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_fifo_reader_sql.py",
+          "contains_all": [
+            "test_sql_fifo_prefix_matches_previous_reader",
+            "test_sql_never_costs_discarded_suffix",
+            "SET TRANSACTION READ ONLY"
+          ]
+        },
+        {
+          "path": "backend/alembic/versions/235_pump_label_resource_block.py",
+          "contains_all": [
+            "234_pump_ml_job_ledger",
+            "resource_block jsonb"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_exact_price_paths.py",
+          "contains_all": [
+            "test_budget_prefix_only_completes_admitted_horizons",
+            "explicit_review_required"
+          ]
+        },
+        {
+          "path": "backend/app/services/pump_contracts.py",
+          "contains_all": [
+            "provider_listing_epoch_unavailable",
+            "Strict temporal cuts required",
+            "Frozen cost policy hash mismatch"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_contracts.py",
+          "contains_all": [
+            "test_listing_zero_unknown_no_epoch_invention",
+            "test_frozen_manifest_rejects_incompatible_or_ambiguous_contracts"
+          ]
+        },
+        {
+          "path": "frontend/components/pump-monitor/PumpOpportunityPanel.tsx",
+          "contains_all": [
+            "Limites de risco não configurados",
+            "Suporte estatístico não validado",
+            "Rótulos vencidos na fila"
+          ]
+        },
+        {
+          "path": "pump_ml/Dockerfile",
+          "contains_all": [
+            "kill-after=5s",
+            "895s",
+            "OMP_NUM_THREADS=1"
+          ]
+        },
+        {
+          "path": "pump_ml/job.py",
+          "contains_all": [
+            "daily_already_recorded",
+            "pg_try_advisory_lock",
+            "pump_ml_artifacts",
+            "production_model_validated"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_ml_daily_job.py",
+          "contains_all": [
+            "test_daily_singleton_and_missing_listing_stop_before_training",
+            "test_daily_job_cannot_train_micro_sample"
+          ]
+        }
       ]
     },
     {
-      "id":"pump-versioned-pre-touch-adverse-excursion",
-      "description":"New frozen exact-trade contracts separate per-target adverse excursion, censored prefixes, timestamp order and whole-horizon MAE",
-      "files":[
-        {"path":"backend/app/services/pump_opportunity_engine.py","contains_all":["pump_gross_touch_v4","reference_to_first_touch_strict_timestamp_v1","def first_touch_and_drawdown(","gap_before_or_at_observed_touch","touch_timestamp_order_ambiguous"]},
-        {"path":"backend/app/services/pump_intelligence.py","contains_all":["contract_key","label_version","score_config_hash","label_spec_hash"]},
-        {"path":"backend/tests/test_pump_pre_touch_drawdown.py","contains_all":["test_targets_have_distinct_prefixes_and_exclude_later_drawdown","test_v3_output_unchanged_and_v4_contract_hash_is_distinct","test_intelligence_exposes_separate_frozen_contract_support"]},
-        {"path":"frontend/components/pump-monitor/PumpOpportunityPanel.tsx","contains_all":["drawdown_before_touch_pct","MAE total do horizonte","PumpIntelligenceView"]}
+      "id": "pump-versioned-pre-touch-adverse-excursion",
+      "description": "New frozen exact-trade contracts separate per-target adverse excursion, censored prefixes, timestamp order and whole-horizon MAE",
+      "files": [
+        {
+          "path": "backend/app/services/pump_opportunity_engine.py",
+          "contains_all": [
+            "pump_gross_touch_v4",
+            "reference_to_first_touch_strict_timestamp_v1",
+            "def first_touch_and_drawdown(",
+            "gap_before_or_at_observed_touch",
+            "touch_timestamp_order_ambiguous"
+          ]
+        },
+        {
+          "path": "backend/app/services/pump_intelligence.py",
+          "contains_all": [
+            "contract_key",
+            "label_version",
+            "score_config_hash",
+            "label_spec_hash"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_pre_touch_drawdown.py",
+          "contains_all": [
+            "test_targets_have_distinct_prefixes_and_exclude_later_drawdown",
+            "test_v3_output_unchanged_and_v4_contract_hash_is_distinct",
+            "test_intelligence_exposes_separate_frozen_contract_support"
+          ]
+        },
+        {
+          "path": "frontend/components/pump-monitor/PumpOpportunityPanel.tsx",
+          "contains_all": [
+            "drawdown_before_touch_pct",
+            "MAE total do horizonte",
+            "PumpIntelligenceView"
+          ]
+        }
       ]
     },
-{
+    {
       "id": "pump-descriptive-intelligence-bounded-refresh",
       "description": "Separate compatible contracts, preserve unknowns/censorship, bounded indexed cache and manual historical refresh with latest-response protection",
       "files": [
-            {
-                  "path": "backend/app/services/pump_intelligence_reader.py",
-                  "contains_all": [
-                        "bucket_picks AS MATERIALIZED",
-                        "LEFT JOIN LATERAL",
-                        "begin_nested",
-                        "max_read_bytes",
-                        "whole_history",
-                        "refresh_failed"
-                  ]
-            },
-            {
-                  "path": "backend/app/services/pump_intelligence.py",
-                  "contains_all": [
-                        "contract_key",
-                        "first_touch_censored",
-                        "time_interval_lower_seconds",
-                        "pre_touch_unknown",
-                        "score_bands"
-                  ]
-            },
-            {
-                  "path": "backend/tests/test_pump_intelligence.py",
-                  "contains_all": [
-                        "test_contracts_producers_and_score_bands_never_merge",
-                        "test_cache_single_flight_reuses_rows_and_failure_preserves_previous_snapshot",
-                        "test_censored_time_and_ambiguous_pre_touch_are_never_exact_measurements"
-                  ]
-            },
-            {
-                  "path": "frontend/components/pump-monitor/PumpIntelligenceView.tsx",
-                  "contains_all": [
-                        "refresh(true)",
-                        "guard.current.isCurrent",
-                        "computed_at",
-                        "sample_truncated",
-                        "Contrato selecionado fora da amostra atual"
-                  ]
-            },
-            {
-                  "path": "frontend/lib/pump-intelligence.test.ts",
-                  "contains_all": [
-                        "late horizon or filter responses",
-                        "historical snapshot does not expire"
-                  ]
-            }
+        {
+          "path": "backend/app/services/pump_intelligence_reader.py",
+          "contains_all": [
+            "bucket_picks AS MATERIALIZED",
+            "LEFT JOIN LATERAL",
+            "begin_nested",
+            "max_read_bytes",
+            "whole_history",
+            "refresh_failed"
+          ]
+        },
+        {
+          "path": "backend/app/services/pump_intelligence.py",
+          "contains_all": [
+            "contract_key",
+            "first_touch_censored",
+            "time_interval_lower_seconds",
+            "pre_touch_unknown",
+            "score_bands"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_intelligence.py",
+          "contains_all": [
+            "test_contracts_producers_and_score_bands_never_merge",
+            "test_cache_single_flight_reuses_rows_and_failure_preserves_previous_snapshot",
+            "test_censored_time_and_ambiguous_pre_touch_are_never_exact_measurements"
+          ]
+        },
+        {
+          "path": "frontend/components/pump-monitor/PumpIntelligenceView.tsx",
+          "contains_all": [
+            "refresh(true)",
+            "guard.current.isCurrent",
+            "computed_at",
+            "sample_truncated",
+            "Contrato selecionado fora da amostra atual"
+          ]
+        },
+        {
+          "path": "frontend/lib/pump-intelligence.test.ts",
+          "contains_all": [
+            "late horizon or filter responses",
+            "historical snapshot does not expire"
+          ]
+        }
       ]
-},
-    {"id":"pump-executive-observational-insights","description":"Executive counts retain unknowns, fixed GMT-3 start-time exposure, compatible median ranges and separate bounded verified Shadow context",
-    "files":[
-      {"path":"backend/app/services/pump_executive_insights.py","contains_all":["actionable_hour_ranking","sample_median_no_outcome_selection","no_verified_pump_shadow_link","verified_shadow_outcome","entry_price_contract_version","exit_policy_hash"]},
-      {"path":"backend/app/services/pump_shadow_context.py","contains_all":["shadow_trades","read_bytes<=:bytes","begin_nested","shared_read_byte_budget"]},
-      {"path":"frontend/components/pump-monitor/PumpExecutiveSummary.tsx","contains_all":["targetNarrative","taxa operacional","Melhor/pior horário","Cobertura e composição","SL no Shadow"]},
-      {"path":"backend/tests/test_pump_executive_insights.py","contains_all":["test_seven_hits_eight_unknown_never_become_operational_success_rate","test_indicator_ranges_do_not_select_by_outcome_or_fill_missing","test_shadow_invalid_lineage_not_repaired_and_profiles_sources_policies_separate"]},
-      {"path":"frontend/lib/pump-intelligence.test.ts","contains_all":["winner concentration and group hit rate","seven hits and eight unknown","GMT minus three is fixed"]}
-    ]}
-    ,{"id":"l3-declared-input-provenance","description":"Resolve declared closed M1 DI and observed book spread before L3 authorization without weakening required conditions",
-    "files":[
-      {"path":"backend/app/services/l3_contract_inputs.py","contains_all":["L3_DECLARED_INPUT_PROVENANCE","closed_di_candidates","capture_contract_version","fetch_raw_orderbook","_l3_live_order_book_snapshot"]},
-      {"path":"backend/app/tasks/pipeline_scan.py","contains_all":["assets = await prepare_l3_contract_inputs(db, assets, profile_config or {}, runtime_policy)","L3_DECLARED_INPUTS_BEFORE_REJECTIONS","contract_inputs_prepared=True"]},
-      {"path":"backend/app/services/pipeline_rejections.py","contains_all":["def _declared_candle_asset","_declared_candle_asset(asset, condition)"]},
-      {"path":"backend/app/services/l3_authorization_contract_v3.py","contains_all":["_l3_contract_ohlcv_candidates"]},
-      {"path":"backend/app/services/indicator_classifier.py","contains_all":["if name == \"di_trend\":"]},
-      {"path":"backend/app/services/profile_engine.py","contains_all":["Single-asset L3 evaluation must use the same exact candle inputs"]},
-      {"path":"backend/tests/test_l3_contract_inputs.py","contains_all":["test_declared_inputs_resolve_without_changing_profile_or_upstream","test_real_threshold_boundaries_remain_enforced","test_missing_or_stale_required_evidence_never_authorizes","test_di_never_fabricates_identity_from_invalid_candles"]}
-    ]},
+    },
+    {
+      "id": "pump-executive-observational-insights",
+      "description": "Executive counts retain unknowns, fixed GMT-3 start-time exposure, compatible median ranges and separate bounded verified Shadow context",
+      "files": [
+        {
+          "path": "backend/app/services/pump_executive_insights.py",
+          "contains_all": [
+            "actionable_hour_ranking",
+            "sample_median_no_outcome_selection",
+            "no_verified_pump_shadow_link",
+            "verified_shadow_outcome",
+            "entry_price_contract_version",
+            "exit_policy_hash"
+          ]
+        },
+        {
+          "path": "backend/app/services/pump_shadow_context.py",
+          "contains_all": [
+            "shadow_trades",
+            "read_bytes<=:bytes",
+            "begin_nested",
+            "shared_read_byte_budget"
+          ]
+        },
+        {
+          "path": "frontend/components/pump-monitor/PumpExecutiveSummary.tsx",
+          "contains_all": [
+            "targetNarrative",
+            "taxa operacional",
+            "Melhor/pior horário",
+            "Cobertura e composição",
+            "SL no Shadow"
+          ]
+        },
+        {
+          "path": "backend/tests/test_pump_executive_insights.py",
+          "contains_all": [
+            "test_seven_hits_eight_unknown_never_become_operational_success_rate",
+            "test_indicator_ranges_do_not_select_by_outcome_or_fill_missing",
+            "test_shadow_invalid_lineage_not_repaired_and_profiles_sources_policies_separate"
+          ]
+        },
+        {
+          "path": "frontend/lib/pump-intelligence.test.ts",
+          "contains_all": [
+            "winner concentration and group hit rate",
+            "seven hits and eight unknown",
+            "GMT minus three is fixed"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "l3-declared-input-provenance",
+      "description": "Resolve declared closed M1 DI and observed book spread before L3 authorization without weakening required conditions",
+      "files": [
+        {
+          "path": "backend/app/services/l3_contract_inputs.py",
+          "contains_all": [
+            "L3_DECLARED_INPUT_PROVENANCE",
+            "closed_di_candidates",
+            "capture_contract_version",
+            "fetch_raw_orderbook",
+            "_l3_live_order_book_snapshot"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/pipeline_scan.py",
+          "contains_all": [
+            "assets = await prepare_l3_contract_inputs(db, assets, profile_config or {}, runtime_policy)",
+            "L3_DECLARED_INPUTS_BEFORE_REJECTIONS",
+            "contract_inputs_prepared=True"
+          ]
+        },
+        {
+          "path": "backend/app/services/pipeline_rejections.py",
+          "contains_all": [
+            "def _declared_candle_asset",
+            "_declared_candle_asset(asset, condition)"
+          ]
+        },
+        {
+          "path": "backend/app/services/l3_authorization_contract_v3.py",
+          "contains_all": [
+            "_l3_contract_ohlcv_candidates"
+          ]
+        },
+        {
+          "path": "backend/app/services/indicator_classifier.py",
+          "contains_all": [
+            "if name == \"di_trend\":"
+          ]
+        },
+        {
+          "path": "backend/app/services/profile_engine.py",
+          "contains_all": [
+            "Single-asset L3 evaluation must use the same exact candle inputs"
+          ]
+        },
+        {
+          "path": "backend/tests/test_l3_contract_inputs.py",
+          "contains_all": [
+            "test_declared_inputs_resolve_without_changing_profile_or_upstream",
+            "test_real_threshold_boundaries_remain_enforced",
+            "test_missing_or_stale_required_evidence_never_authorizes",
+            "test_di_never_fabricates_identity_from_invalid_candles"
+          ]
+        }
+      ]
+    },
     {
       "id": "shadow-executable-entry-price-integrity",
       "description": "Candle indicators cannot overwrite quote identity; canonical spot L3 Shadow entries use dated Gate ask depth without changing external API or authorization policies",
@@ -2687,7 +3428,10 @@
         },
         {
           "path": "frontend/app/dashboard/shadow-portfolio/page.tsx",
-          "contains_all": ["Origem do sinal", "shadowEntrySignalLabel(it.entry_signal)"]
+          "contains_all": [
+            "Origem do sinal",
+            "shadowEntrySignalLabel(it.entry_signal)"
+          ]
         }
       ]
     },
@@ -2879,48 +3623,173 @@
       "id": "shadow-fixed-independent-exits",
       "description": "Explicit Shadow fixed TP/SL and barrier-only exit policy are frozen for new trades, independent of Spot and managed exits.",
       "files": [
-        {"path": "backend/app/services/shadow_trade_service.py", "contains_all": ["SHADOW_FIXED_EXIT_POLICY", "shadow_only_tp_sl"]},
-        {"path": "backend/app/tasks/shadow_trade_monitor.py", "contains_all": ["not only_tp_sl"]},
-        {"path": "backend/app/services/shadow_l3_exit_service.py", "contains_all": ["shadow_only_tp_sl"]},
-        {"path": "backend/tests/test_shadow_fixed_exit_policy.py", "contains_all": ["test_creation_freezes_fixed_snapshot_and_disables_early_exits", "test_fixed_boundaries_hold_or_close_without_early_exit"]},
-        {"path": "frontend/app/settings/strategies/page.tsx", "contains_all": ["TP fixo do Shadow", "SL fixo do Shadow", "Encerrar somente por TP ou SL"]}
+        {
+          "path": "backend/app/services/shadow_trade_service.py",
+          "contains_all": [
+            "SHADOW_FIXED_EXIT_POLICY",
+            "shadow_only_tp_sl"
+          ]
+        },
+        {
+          "path": "backend/app/tasks/shadow_trade_monitor.py",
+          "contains_all": [
+            "not only_tp_sl"
+          ]
+        },
+        {
+          "path": "backend/app/services/shadow_l3_exit_service.py",
+          "contains_all": [
+            "shadow_only_tp_sl"
+          ]
+        },
+        {
+          "path": "backend/tests/test_shadow_fixed_exit_policy.py",
+          "contains_all": [
+            "test_creation_freezes_fixed_snapshot_and_disables_early_exits",
+            "test_fixed_boundaries_hold_or_close_without_early_exit"
+          ]
+        },
+        {
+          "path": "frontend/app/settings/strategies/page.tsx",
+          "contains_all": [
+            "TP fixo do Shadow",
+            "SL fixo do Shadow",
+            "Encerrar somente por TP ou SL"
+          ]
+        }
       ]
     },
     {
       "id": "mtf-structure-entry-separation",
       "description": "MTF displays structural direction independently from simulated entry status and active vetoes, without labeling an uptrend as a buy.",
       "files": [
-        {"path": "frontend/components/mtf/MTFEntryContext.tsx", "contains_all": ["MTF_ENTRY_CONTEXT", "MTFStructurePanel", "Entrada simulada", "analysis.vetoes", "entries[analysis.status]"]},
-        {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFEntryContext analysis={analysis}"]},
-        {"path": "frontend/lib/mtfEntryContext.test.ts", "contains_all": ["uptrend with veto remains no trade", "unavailable evaluations never suggest an entry"]}
+        {
+          "path": "frontend/components/mtf/MTFEntryContext.tsx",
+          "contains_all": [
+            "MTF_ENTRY_CONTEXT",
+            "MTFStructurePanel",
+            "Entrada simulada",
+            "analysis.vetoes",
+            "entries[analysis.status]"
+          ]
+        },
+        {
+          "path": "frontend/app/grafico-mtf/page.tsx",
+          "contains_all": [
+            "<MTFEntryContext analysis={analysis}"
+          ]
+        },
+        {
+          "path": "frontend/lib/mtfEntryContext.test.ts",
+          "contains_all": [
+            "uptrend with veto remains no trade",
+            "unavailable evaluations never suggest an entry"
+          ]
+        }
       ]
     },
     {
       "id": "recovery-cmc-credentials",
       "description": "Recovery permits only CMC credential save/test/delete while retaining authentication and blocking real trading mutations.",
       "files": [
-        {"path": "backend/app/main.py", "contains_all": ["RECOVERY_CMC_CREDENTIALS", "ai-keys/coinmarketcap(?:/test)?"]},
-        {"path": "backend/tests/test_mtf_recovery_gate.py", "contains_all": ["test_recovery_cmc_routes_keep_auth_and_user_scoped_storage", "test_recovery_cmc_exception_never_opens_other_mutations"]}
+        {
+          "path": "backend/app/main.py",
+          "contains_all": [
+            "RECOVERY_CMC_CREDENTIALS",
+            "ai-keys/coinmarketcap(?:/test)?"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_recovery_gate.py",
+          "contains_all": [
+            "test_recovery_cmc_routes_keep_auth_and_user_scoped_storage",
+            "test_recovery_cmc_exception_never_opens_other_mutations"
+          ]
+        }
       ]
     },
     {
       "id": "mtf-cmc-fear-greed-display",
       "description": "Official CMC sentiment is display-only, user-key scoped and cached; presentation settings never change the MTF engine.",
       "files": [
-        {"path": "backend/app/services/mtf_fear_greed.py", "contains_all": ["MTF_CMC_DISPLAY_ONLY", "https://pro-api.coinmarketcap.com/v3/fear-and-greed/latest", "redis.lock", "KEY_NOT_CONFIGURED", "CMC_CLASSIFICATION_CASE"]},
-        {"path": "backend/tests/test_mtf_fear_greed.py", "contains_all": ["test_coalesced_user_cache_rotation_failure_and_original_time", "test_endpoint_auth_read_only_and_releases_transaction", "test_age_uses_source_time_not_latest_fetch_and_settings_do_not_change_engine", "test_live_classification_casing_preserves_source_value_and_time"]},
-        {"path": "frontend/components/mtf/MTFFearGreed.tsx", "contains_all": ["/mtf/fear-greed", "Configure a CoinMarketCap", "Desatualizado"]},
-        {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFFearGreed"]}
+        {
+          "path": "backend/app/services/mtf_fear_greed.py",
+          "contains_all": [
+            "MTF_CMC_DISPLAY_ONLY",
+            "https://pro-api.coinmarketcap.com/v3/fear-and-greed/latest",
+            "redis.lock",
+            "KEY_NOT_CONFIGURED",
+            "CMC_CLASSIFICATION_CASE"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_fear_greed.py",
+          "contains_all": [
+            "test_coalesced_user_cache_rotation_failure_and_original_time",
+            "test_endpoint_auth_read_only_and_releases_transaction",
+            "test_age_uses_source_time_not_latest_fetch_and_settings_do_not_change_engine",
+            "test_live_classification_casing_preserves_source_value_and_time"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFFearGreed.tsx",
+          "contains_all": [
+            "/mtf/fear-greed",
+            "Configure a CoinMarketCap",
+            "Desatualizado"
+          ]
+        },
+        {
+          "path": "frontend/app/grafico-mtf/page.tsx",
+          "contains_all": [
+            "<MTFFearGreed"
+          ]
+        }
       ]
     },
     {
       "id": "mtf-btc-gate-header",
       "description": "Independent Gate.io BTC/USDT header quote and rolling changes, with no influence on score or vetoes.",
       "files": [
-        {"path": "backend/app/services/mtf_btc_market.py", "contains_all": ["MTF_BTC_MARKET_DISPLAY_ONLY", "GATE_TICKERS_URL", "GATE_SPOT_URL", "TICKER_VS_MINUTE_CLOSE"]},
-        {"path": "backend/tests/test_mtf_btc_market.py", "contains_all": ["test_rolling_returns_use_prior_close_and_independent_signs", "test_authenticated_endpoint_releases_db_without_evaluating_or_writing", "https://api.gateio.ws/api/v4/spot/"]},
-        {"path": "frontend/components/mtf/MTFBitcoinTicker.tsx", "contains_all": ["/mtf/btc-market", "Gate.io", "ArrowDown", "ArrowUp", "MTF_BTC_VETO_READING", "analysis.btc_trend", "analysis.btc_context.frames[tf]", "activeTimeframe", "Veto ativo"]},
-        {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFBitcoinTicker", "timezone={prefs.timezone} analysis={analysis}", "chartRemovalState"]}
+        {
+          "path": "backend/app/services/mtf_btc_market.py",
+          "contains_all": [
+            "MTF_BTC_MARKET_DISPLAY_ONLY",
+            "GATE_TICKERS_URL",
+            "GATE_SPOT_URL",
+            "TICKER_VS_MINUTE_CLOSE"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_btc_market.py",
+          "contains_all": [
+            "test_rolling_returns_use_prior_close_and_independent_signs",
+            "test_authenticated_endpoint_releases_db_without_evaluating_or_writing",
+            "https://api.gateio.ws/api/v4/spot/"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFBitcoinTicker.tsx",
+          "contains_all": [
+            "/mtf/btc-market",
+            "Gate.io",
+            "ArrowDown",
+            "ArrowUp",
+            "MTF_BTC_VETO_READING",
+            "analysis.btc_trend",
+            "analysis.btc_context.frames[tf]",
+            "activeTimeframe",
+            "Veto ativo"
+          ]
+        },
+        {
+          "path": "frontend/app/grafico-mtf/page.tsx",
+          "contains_all": [
+            "<MTFBitcoinTicker",
+            "timezone={prefs.timezone} analysis={analysis}",
+            "chartRemovalState"
+          ]
+        }
       ]
     },
     {
@@ -3048,6 +3917,40 @@
             "Validar sem salvar",
             "Importar JSON",
             "Exportar JSON"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mtf-temporal-decision-evidence",
+      "description": "Closed-candle calculations and immutable decision replay without rewriting strategy parameters.",
+      "files": [
+        {
+          "path": "backend/app/services/feature_engine.py",
+          "contains_all": [
+            "closed_frame",
+            "results.key_metadata"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_replay.py",
+          "contains_all": [
+            "LEGACY_INPUTS_NOT_FROZEN",
+            "INPUT_HASH_MISMATCH"
+          ]
+        },
+        {
+          "path": "backend/tests/test_indicator_temporal.py",
+          "contains_all": [
+            "test_partial_candle_cannot_repaint_technical_values_and_envelopes",
+            "test_triggered_decision_replays_without_context_values_or_configuration_changes"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFDecisionEvidence.tsx",
+          "contains_all": [
+            "Evidências da decisão",
+            "ATR do motor"
           ]
         }
       ]
