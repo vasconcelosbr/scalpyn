@@ -5,6 +5,7 @@ export function remainingToTrigger(row: TriggerCheck): { action: string; amount?
   if (row.state === 'DISABLED') return { action: 'Desativado' };
   if (row.state === 'UNAVAILABLE') return { action: 'Aguardar dados válidos' };
   if (row.state === 'WAITING') return { action: row.note || 'Aguardar a condição anterior' };
+  if (row.id === 'previous_direction') return { action: 'Candle anterior já fechado; aguardar novo par de candles compatível' };
   const a = row.actual, b = row.expected;
   if (row.operator.startsWith('crosses_')) return { action: 'Confirmar cruzamento entre candles fechados; distância isolada não confirma' };
   if (typeof a === 'number' && Number.isFinite(a)) {
