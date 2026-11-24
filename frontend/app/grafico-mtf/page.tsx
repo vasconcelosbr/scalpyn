@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
-import { Activity, ArrowLeft, ChevronDown, ListFilter, Maximize2, Moon, PanelLeftClose, PanelRightClose, RefreshCw, Settings2, ShieldCheck, Sun, Volume2, VolumeX, X } from 'lucide-react';
+import { Activity, ArrowLeft, ChevronDown, ListFilter, Maximize2, Moon, PanelLeftClose, PanelRightClose, RefreshCw, Settings2, ShieldCheck, Sun, X } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
 import { MTFCandlestickChart } from '@/components/shadow-portfolio/TradeCandlestickChart';
 import { number, patternLabels, patternShort, statusLabels, shadowLabels, readingLabel, mergeChart, reasonLabel, type Analysis, type Asset, type Bootstrap, type ChartData, type HistoryItem, type MTFConfig, type MTFReport, type Preferences, type Timeframe } from '@/components/mtf/types';
@@ -16,6 +16,7 @@ import { MTFTriggerDiagnostics } from '@/components/mtf/MTFTriggerDiagnostics';
 import { MTFBitcoinTicker } from '@/components/mtf/MTFBitcoinTicker';
 import { MTFFearGreed } from '@/components/mtf/MTFFearGreed';
 import { MTFEntryContext } from '@/components/mtf/MTFEntryContext';
+import { MTFTriggerAudio } from '@/components/mtf/MTFTriggerAudio';
 
 const initialPreferences: Preferences = { theme: 'dark', timezone: 'America/Sao_Paulo', sound: false, aligned_only: false };
 const statusOrder = { TRIGGERED: 0, ARMED: 1, WAIT: 2, NO_TRADE: 3 };
@@ -56,8 +57,6 @@ export default function MTFPage() {
   const symbolRef = useRef(symbol);
   useEffect(()=>{prefsRef.current=prefs;},[prefs]);
   useEffect(()=>{symbolRef.current=symbol;},[symbol]);
-  const audioRef = useRef<AudioContext | null>(null);
-  const previousTriggers = useRef<Set<string> | null>(null);
   const requestContext = useRef('');
 
   useEffect(() => {
@@ -84,10 +83,7 @@ export default function MTFPage() {
     preferenceWrite.current=preferenceWrite.current.catch(()=>undefined)
       .then(()=>apiFetch('/mtf/preferences', { method: 'PUT', body: JSON.stringify(next) }))
       .catch(() => { /* local fallback is intentional */ });
-    if (change.sound) {
-      audioRef.current ??= new AudioContext();
-      void audioRef.current.resume();
-    }
+
   };
 
   useEffect(() => {
@@ -99,7 +95,6 @@ export default function MTFPage() {
     let failures=0;
     let missingSymbol='';
     let missingCount=0;
-    previousTriggers.current = null;
     const poll = async () => {
       if (first) setListLoading(true);
       try {
@@ -115,15 +110,6 @@ export default function MTFPage() {
           missingCount=0;missingSymbol='';setMembership('current');
           if (!currentSymbol) setSymbol(result.items.find(a=>a.symbol===prefsRef.current.last_symbol)?.symbol??result.items[0]?.symbol??'');
         }
-        const current = new Set(result.items.filter(a => a.mtf?.status === 'TRIGGERED').map(a => `${a.symbol}:${a.mtf?.candle_closed_5m}`));
-        if (prefs.sound && previousTriggers.current && [...current].some(k => !previousTriggers.current!.has(k)) && audioRef.current) {
-          const ac = audioRef.current;
-          const oscillator = ac.createOscillator(); const gain = ac.createGain();
-          oscillator.connect(gain); gain.connect(ac.destination); oscillator.frequency.value = 660;
-          gain.gain.setValueAtTime(0.04, ac.currentTime); gain.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + 0.3);
-          oscillator.start(); oscillator.stop(ac.currentTime + 0.3);
-        }
-        previousTriggers.current = current;
         const report = await apiFetch<MTFReport>(`/mtf/report?watchlist_id=${encodeURIComponent(watchlist)}`, { signal: controller.signal });
         if (!controller.signal.aborted) setReport(report);
       } catch (e) { if (!controller.signal.aborted) {failures++;setListError(e instanceof Error ? e.message : 'Falha ao consultar watchlist');} }
@@ -134,7 +120,7 @@ export default function MTFPage() {
     };
     void poll();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [cfg, watchlist, refresh, prefs.sound]);
+  }, [cfg, watchlist, refresh]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -218,7 +204,7 @@ export default function MTFPage() {
       <div><small>SCORE MTF · NÃO CALIBRADO</small><strong>{analysis ? `${number(analysis.score.total,1)} / ${number(analysis.score.maximum,1)}` : '—'}</strong></div>
       <Badge analysis={analysis}/><span className="mtf-asof">Mercado real · Simulação Shadow<br/>Candle {date(analysis?.candle_closed_5m)}–{date(analysis?.candle_close_at_utc)} (fechado)</span>
     </div>
-    <div className="mtf-toolbar"><label className="mtf-select"><span>Watchlist</span><select aria-label="Watchlist" value={watchlist} onChange={e => { setWatchlist(e.target.value); preference({last_watchlist:e.target.value}); setAssets([]); setSymbol(''); setProfile(''); }}>{boot?.watchlists.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label><button onClick={() => setLeft(!left)}><PanelLeftClose size={14}/> Ativos</button><button onClick={() => setRight(!right)}><PanelRightClose size={14}/> Análise</button><Link href="/grafico-mtf/historico">Histórico de observações</Link><div className="mtf-spacer"/><button onClick={() => preference({ timezone: prefs.timezone === 'UTC' ? 'America/Sao_Paulo' : 'UTC' })}>{prefs.timezone === 'UTC' ? 'UTC' : 'Brasília'}</button><button aria-label="Alternar alerta sonoro" onClick={() => preference({ sound: !prefs.sound })}>{prefs.sound ? <Volume2 size={15}/> : <VolumeX size={15}/>}</button><button onClick={() => setRefresh(v => v+1)}><RefreshCw size={14} className={loading ? 'spin' : ''}/> Atualizar</button></div>
+    <div className="mtf-toolbar"><label className="mtf-select"><span>Watchlist</span><select aria-label="Watchlist" value={watchlist} onChange={e => { setWatchlist(e.target.value); preference({last_watchlist:e.target.value}); setAssets([]); setSymbol(''); setProfile(''); }}>{boot?.watchlists.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}</select></label><button onClick={() => setLeft(!left)}><PanelLeftClose size={14}/> Ativos</button><button onClick={() => setRight(!right)}><PanelRightClose size={14}/> Análise</button><Link href="/grafico-mtf/historico">Histórico de observações</Link><div className="mtf-spacer"/><button onClick={() => preference({ timezone: prefs.timezone === 'UTC' ? 'America/Sao_Paulo' : 'UTC' })}>{prefs.timezone === 'UTC' ? 'UTC' : 'Brasília'}</button><MTFTriggerAudio enabled={prefs.sound} active={shown.some(asset => asset.mtf?.status === 'TRIGGERED')} onChange={sound => preference({sound})}/><button onClick={() => setRefresh(v => v+1)}><RefreshCw size={14} className={loading ? 'spin' : ''}/> Atualizar</button></div>
     {!cfg?.enabled && cfg && <div className="mtf-warning">Novas avaliações estão pausadas. O acompanhamento das simulações abertas continua.</div>}
     {cfg && !cfg.monitored_watchlists.includes(watchlist) && <div className="mtf-warning">Esta watchlist está em consulta. Para registrar avaliações continuamente: <button onClick={monitor}>Ativar observação Shadow</button></div>}
     <div className={`mtf-grid ${left ? '' : 'hide-left'} ${right ? '' : 'hide-right'}`}>
