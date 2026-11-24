@@ -16,4 +16,6 @@ test('missing, waiting and categorical values never become fabricated numeric pr
   for (const override of [{actual:null,state:'UNAVAILABLE'}, {actual:NaN}, {actual:false,expected:true,operator:'='}, {state:'WAITING'}, {state:'DISABLED'}, {state:'PASS'}] as Partial<TriggerCheck>[])
     assert.equal(remainingToTrigger(row(override)).amount, undefined);
   assert.equal(remainingToTrigger(row({state:'WAITING',note:'Aguardando padrão'})).action,'Aguardando padrão');
+  assert.equal(remainingToTrigger(row({id:'previous_direction'})).amount, undefined);
+  assert.match(remainingToTrigger(row({id:'previous_direction'})).action, /já fechado/);
 });
