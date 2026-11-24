@@ -3085,6 +3085,31 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mtf-continuous-trigger-audio",
+      "description": "User-supplied looping trigger audio follows the displayed watchlist and stops on mute, status exit or unmount.",
+      "files": [
+        {
+          "path": "frontend/components/mtf/MTFTriggerAudio.tsx",
+          "contains_all": [
+            "source.loop = true",
+            "fetch('/audio/gatilho.mp3')",
+            "source?.stop()"
+          ]
+        },
+        {
+          "path": "frontend/app/grafico-mtf/page.tsx",
+          "contains_all": [
+            "<MTFTriggerAudio",
+            "shown.some(asset => asset.mtf?.status"
+          ]
+        },
+        {
+          "path": "frontend/public/audio/gatilho.mp3",
+          "contains_all": []
+        }
+      ]
     }
   ]
 }
