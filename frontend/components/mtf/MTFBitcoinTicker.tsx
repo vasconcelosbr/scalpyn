@@ -75,7 +75,7 @@ export function MTFBitcoinTicker({ pollSeconds, refresh, timezone, analysis }: {
     <small className="mtf-btc-source" title="Cotação BTC/USDT da Gate.io. Variações móveis com referência no último fechamento de 1min anterior a cada intervalo.">
       Gate.io · {status}
     </small>
-    {(['4h', '1h'] as const).map(tf => {
+    {([...new Set(['4h', '1h', activeTimeframe])]).map(tf => {
       const trend = current ? (analysis.btc_context
         ? analysis.btc_context.frames[tf]?.trend
         : tf === activeTimeframe ? analysis.btc_trend : null) : null;

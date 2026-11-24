@@ -357,3 +357,42 @@ async def test_v3_chart_uses_owned_contract_without_global_indicator_reads(
         other["analysis"]["indicator_identity"]
         != data["analysis"]["indicator_identity"]
     )
+
+
+def test_conversion_retains_rsi_variants_and_adx_acceleration():
+    import math
+    from app.schemas.mtf_rules import DURATIONS
+
+    raw = complete_config(
+        experimental_preset(),
+        {
+            "atr": {"enabled": True, "period": 14},
+            "rsi": {"enabled": True, "period": 14, "periods": [6, 12, 24]},
+            "adx": {"enabled": True, "period": 14},
+        },
+    )
+    for instance in raw["indicators"].values():
+        instance["sample_window"] = 30
+    cfg = MTFChartConfig.model_validate(raw)
+    market = {
+        tf: [
+            candle(
+                t=i * DURATIONS[tf],
+                h=103 + math.sin(i),
+                l=98 + math.sin(i),
+                c=100 + math.sin(i),
+            )
+            for i in range(35)
+        ]
+        for tf in cfg.active_timeframes()
+    }
+    frames, series, errors = calculate_frames(market, cfg, 35 * DURATIONS["4h"])
+    assert not errors
+    assert all(
+        frames[tf]["indicators"].get(name)
+        for tf in cfg.active_timeframes()
+        for name in ("rsi", "rsi_6", "rsi_12", "rsi_24", "adx_acceleration")
+    )
+    assert series["indicators.rsi_6_1h"][-1]["configuration"]["parameters"] == {
+        "period": 6
+    }

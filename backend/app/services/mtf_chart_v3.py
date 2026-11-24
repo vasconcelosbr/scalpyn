@@ -60,6 +60,8 @@ def calculate_frames(raw, cfg, cutoff):
                     settings = {
                         instance.family: {"enabled": True, **instance.parameters}
                     }
+                    if instance.family == "rsi":
+                        settings["rsi"]["periods"] = [instance.parameters["period"]]
                     grouped[group] = indicator_history(
                         candles,
                         settings,
