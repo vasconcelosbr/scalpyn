@@ -42,7 +42,7 @@ export interface Analysis {
   btc_trend_timeframe?: Timeframe;
   btc_context?: {
     version: 'mtf_btc_context_v1'; active_timeframe: Timeframe; veto_enabled: boolean; exempt: boolean;
-    frames: Record<'4h' | '1h', {trend: 'UP' | 'DOWN' | 'RANGE' | null; reason: string | null;
+    frames: Record<string, {trend: 'UP' | 'DOWN' | 'RANGE' | null; reason: string | null;
       pivots_used: Pivot[]; reference_candle: {open_at: string; close_at: string; close: number} | null}>;
   };
   profile_id?: string | null;
@@ -101,7 +101,7 @@ export interface Preferences { theme: 'dark' | 'light'; timezone: 'America/Sao_P
 export interface ConfigSchema { type?: string; $ref?: string; $defs?: Record<string, ConfigSchema>; properties?: Record<string, ConfigSchema>; anyOf?: ConfigSchema[]; items?: ConfigSchema; additionalProperties?: ConfigSchema | boolean; minimum?: number; maximum?: number; exclusiveMinimum?: number; exclusiveMaximum?: number; enum?: unknown[]; required?: string[]; minItems?: number }
 export interface Bootstrap { effective_preset?: MTFConfig | null; effective_config?: MTFConfig|null; conversion_error?:string|null; catalog?: {indicators:Record<string,{parameters:string[];outputs:string[]}>;timeframes:Timeframe[];context_fields:string[];operators:string[]}; pump_flow_preset?: Record<string, unknown>; config: MTFConfig | null; preset: MTFConfig; presentation_preset: Presentation; watchlists: Watchlist[]; profiles: Profile[]; preferences: Partial<Preferences>; inherited_atr?: { enabled?: boolean; period?: number } | null; config_schema?: ConfigSchema }
 export interface HistoryItem { evaluation: Analysis; observed_at: string; shadow: { status: string; pnl_pct?: number | null; pnl_usdt?: number | null; fill?: number; ambiguous?: boolean; reason?: string } | null }
-export interface MTFReport { groups: { pattern: string; config_hash: string; n: number; mean_pct: number; ambiguous: number; sample_sufficient: boolean; confidence_interval: [number,number] | null; fee_per_side_pct: number; slippage_pct: number }[]; confidence_level: number; formula: string; origin: string; method: string }
+export interface MTFReport { groups: { timeframe?: Timeframe; pattern: string; config_hash: string; n: number; mean_pct: number; ambiguous: number; sample_sufficient: boolean; confidence_interval: [number,number] | null; fee_per_side_pct: number; slippage_pct: number }[]; confidence_level: number; formula: string; origin: string; method: string }
 export const statusLabels: Record<MTFStatus, string> = { NO_TRADE: 'SEM TRADE', WAIT: 'AGUARDAR', ARMED: 'ARMADO', TRIGGERED: 'GATILHO' };
 export const patternLabels: Record<string, string> = { ENGULF_BULL: 'Engolfo de alta', ENGULF_BEAR: 'Engolfo de baixa', PIN_BULL: 'Martelo / Pin de alta', PIN_BEAR: 'Pin de baixa', SHOOTING_STAR: 'Estrela cadente', DOJI: 'Doji', HARAMI: 'Harami', INSIDE_BAR: 'Inside Bar', MARUBOZU_BULL: 'Marubozu de alta', MARUBOZU_BEAR: 'Marubozu de baixa' };
 export const patternShort: Record<string, string> = { ENGULF_BULL: 'ENG', ENGULF_BEAR: 'ENG', PIN_BULL: 'MART', PIN_BEAR: 'PIN', SHOOTING_STAR: 'EC', DOJI: 'DOJI', HARAMI: 'HAR', INSIDE_BAR: 'IB', MARUBOZU_BULL: 'MARU', MARUBOZU_BEAR: 'MARU' };

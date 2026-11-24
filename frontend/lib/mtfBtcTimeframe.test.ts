@@ -15,7 +15,7 @@ test('legacy BTC reading remains 4H and does not fabricate 1H',()=>{
 });
 test('both frozen BTC states display with active hourly veto; stale readings disappear',()=>{
  const a={...base,btc_trend:'RANGE',btc_trend_timeframe:'1h',
-   btc_context:{active_timeframe:'1h',veto_enabled:true,frames:{'4h':{trend:'DOWN'},'1h':{trend:'RANGE'}}}} as Analysis;
+   btc_context:{version:'mtf_btc_context_v1',exempt:false,active_timeframe:'1h',veto_enabled:true,frames:{'4h':{trend:'DOWN',reason:null,pivots_used:[],reference_candle:null},'1h':{trend:'RANGE',reason:null,pivots_used:[],reference_candle:null}}}} as Analysis;
  const html=render(a);
  assert(html.includes('Tendência do Bitcoin · 4H: Baixa'));
  assert(html.includes('Tendência do Bitcoin · 1H: Lateral'));
@@ -31,3 +31,9 @@ test('timeframe setting preserves all other saved fields',()=>{
  assert.equal(current.btc_trend_timeframe,'4h');
 });
 
+
+
+test('complete contract shows the configured BTC veto timeframe',()=>{
+ const a={...base,btc_trend_timeframe:'15m',btc_context:{version:'mtf_btc_context_v1',exempt:false,active_timeframe:'15m',veto_enabled:true,frames:{'15m':{trend:'UP',reason:null,pivots_used:[],reference_candle:null}}}} as Analysis;
+ assert.match(render(a),/Tendência do Bitcoin · 15M<small> · Veto ativo/);
+});

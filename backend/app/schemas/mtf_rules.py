@@ -10,8 +10,11 @@ DURATIONS = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 864
 # Only real OHLCV producers; order-flow stubs are deliberately not advertised.
 CATALOG = {
     "ema": {"parameters": ["periods"], "outputs": ["ema{period}"]},
-    "rsi": {"parameters": ["period"], "outputs": ["rsi"]},
-    "adx": {"parameters": ["period"], "outputs": ["adx", "di_plus", "di_minus"]},
+    "rsi": {"parameters": ["period"], "outputs": ["rsi", "rsi_{period}"]},
+    "adx": {
+        "parameters": ["period"],
+        "outputs": ["adx", "di_plus", "di_minus", "adx_acceleration"],
+    },
     "atr": {"parameters": ["period"], "outputs": ["atr"]},
     "macd": {
         "parameters": ["fast", "slow", "signal"],
@@ -113,6 +116,8 @@ class IndicatorInstance(StrictModel):
             if self.family == "ema"
             else spec["outputs"]
         )
+        if self.family == "rsi":
+            outputs = ["rsi", "rsi_" + str(self.parameters["period"])]
         if self.output not in outputs:
             raise ValueError("INDICATOR_OUTPUT_NOT_SUPPORTED")
         if self.family == "macd" and self.parameters["fast"] >= self.parameters["slow"]:

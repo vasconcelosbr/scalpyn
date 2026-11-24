@@ -354,9 +354,9 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
       if (name==='target') series.applyOptions({title:targetTitle,priceFormat:data.price_format?{type:'price',precision:data.price_format.precision,minMove:data.price_format.min_move}:{type:'custom',formatter:formatPrice,minMove:Number.EPSILON}});
       series.setData((name==='target'?target:frame.indicators[name]??[]).map(p=>({...p,time:p.time as Time})));
     });
-    markersRef.current?.setMarkers(visibleMarks(frame,config,preferences,timeframe==='5m'?data.analysis.trigger_5m:null).map(m=>({time:m.time as Time,text:m.label,position:m.above?'aboveBar':'belowBar',shape:'circle',color:m.pattern?(m.above?COLORS.red:COLORS.green):'#95a3b8'})));
+    markersRef.current?.setMarkers(visibleMarks(frame,config,preferences,timeframe===(data.analysis.stage_timeframes?.trigger ?? '5m')?data.analysis.trigger_5m:null).map(m=>({time:m.time as Time,text:m.label,position:m.above?'aboveBar':'belowBar',shape:'circle',color:m.pattern?(m.above?COLORS.red:COLORS.green):'#95a3b8'})));
     if (zoneRef.current) price.detachPrimitive(zoneRef.current);
-    const reference=data.frames['5m'].candles.filter(c=>c.closed).at(-1)?.close;
+    const reference=data.frames[data.analysis.stage_timeframes?.trigger ?? '5m'].candles.filter(c=>c.closed).at(-1)?.close;
     const zones=reference==null?[]:(frame.zones??[]);
     const below=zones.filter(z=>z.high<reference!).sort((a,b)=>b.high-a.high).slice(0,config.zones_per_side);
     const above=zones.filter(z=>z.low>reference!).sort((a,b)=>a.low-b.low).slice(0,config.zones_per_side);
@@ -405,10 +405,10 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     {(frame.error||frame.warmup?.reason)&&<div className="mtf-warning">Histórico insuficiente ou descontínuo: indicadores sem cobertura permanecem indisponíveis.</div>}
     {frame.stale&&<div className="mtf-warning">Dados de mercado atrasados — sem confirmação de sinal atual.</div>}
     {config.entry_band_enabled && <section className={`mtf-entry-band ${band?.state ?? 'UNAVAILABLE'}`} aria-label="Faixa candidata de entrada" aria-live="polite">
-      <div className="mtf-entry-band-heading"><strong>Faixa candidata · suporte 1H</strong><span>{entryBandLabels[band?.state ?? 'UNAVAILABLE']}</span></div>
+      <div className="mtf-entry-band-heading"><strong>Faixa candidata · suporte {(band?.timeframe ?? '1h').toUpperCase()}</strong><span>{entryBandLabels[band?.state ?? 'UNAVAILABLE']}</span></div>
       {bandAvailable ? <>
         <div className="mtf-entry-band-prices"><b>{formatPrice(band!.low!)} — {formatPrice(band!.high!)}</b><button onClick={()=>setFitBand(!fitBand)} aria-pressed={fitBand}>{fitBand?'Restaurar enquadramento':'Enquadrar faixa'}</button></div>
-        <p>Suporte: {formatPrice(band!.support_low!)} — {formatPrice(band!.support_high!)} · proximidade: {number(band!.proximity_atr,2)} × ATR do 1H.</p>
+        <p>Suporte: {formatPrice(band!.support_low!)} — {formatPrice(band!.support_high!)} · proximidade: {number(band!.proximity_atr,2)} × ATR do {(band?.timeframe ?? '1h').toUpperCase()}.</p>
         {band?.vetoes.map(v=><p key={v}>Veto: {reasonLabel(v,config)}.</p>)}
         {band?.state==='CONFIRMED' && band.entry!=null && <p>Entrada confirmada para simulação: {formatPrice(band.entry)}.</p>}
         <p>Faixa da avaliação de {date(Date.parse(band!.evaluated_at)/1000)}, válida até {date(Date.parse(band!.valid_until)/1000)}. Guia atual de proximidade; não representa entradas históricas nem aprovação de todos os preços da faixa.</p>
@@ -417,6 +417,6 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
     <div className="mtf-chart-scroll"><div ref={host} style={{width:'100%',height}} /></div>
     <div className="mtf-hover-detail">{showTarget && candle && <span className="mtf-target-value">{targetTitle} {formatPrice(target.find(p=>p.time===candle.time)?.value ?? NaN)} · </span>}{candle&&Object.entries(frame.indicators).flatMap(([name,points])=>{const point=points.find(p=>p.time===candle.time);return point?[`${name.toUpperCase()} ${number(point.value,4)}`]:[];}).join(' · ')}<br/>{frame.patterns.filter(p=>p.time===candle?.time).map(p=>patternLabels[p.pattern]??'Padrão').join(' · ')}</div>
     {targetEnabled && <div className="mtf-chart-note">{targetTitle}: valorização bruta sobre o fechamento de cada candle, antes de taxas. O ponto em formação acompanha o preço.</div>}
-    <div className="mtf-chart-note">Zonas do {timeframe.toUpperCase()} · Contexto do plano: H1 · Candle cinza em formação não gera sinal · {preferences.timezone==='UTC'?'UTC':'Brasília'}</div>
+    <div className="mtf-chart-note">Zonas do {timeframe.toUpperCase()} · Contexto do plano: {(data.analysis.stage_timeframes?.zone ?? '1h').toUpperCase()} · Candle cinza em formação não gera sinal · {preferences.timezone==='UTC'?'UTC':'Brasília'}</div>
   </div>;
 }

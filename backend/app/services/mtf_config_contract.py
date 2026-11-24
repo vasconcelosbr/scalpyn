@@ -62,6 +62,8 @@ def complete_config(raw, inherited):
                 if family == "ema"
                 else spec["outputs"]
             )
+            if family == "rsi":
+                outputs = ["rsi"]
             for name in outputs:
                 output["indicators"][name + "_" + tf] = dict(
                     family=family,
@@ -72,6 +74,19 @@ def complete_config(raw, inherited):
                     display=family in ("ema", "rsi", "adx", "atr"),
                     sample_window=window,
                 )
+
+            if family == "rsi":
+                for period in setting.get("periods", []):
+                    name = "rsi_" + str(period)
+                    output["indicators"][name + "_" + tf] = dict(
+                        family="rsi",
+                        output=name,
+                        parameters={"period": period},
+                        timeframe=tf,
+                        enabled=True,
+                        display=True,
+                        sample_window=window,
+                    )
 
     def group(key, ref):
         return {
