@@ -396,3 +396,30 @@ def test_conversion_retains_rsi_variants_and_adx_acceleration():
     assert series["indicators.rsi_6_1h"][-1]["configuration"]["parameters"] == {
         "period": 6
     }
+
+
+@pytest.mark.asyncio
+async def test_request_validation_error_survives_database_rollback(raw, monkeypatch):
+    from app import database
+    from fastapi import FastAPI, Depends
+    from fastapi.testclient import TestClient
+
+    session = AsyncMock()
+    session.__aenter__.return_value = session
+    session.__aexit__.return_value = False
+    monkeypatch.setattr(database, "AsyncSessionLocal", lambda: session)
+    app = FastAPI()
+
+    @app.post("/validate")
+    async def route(payload: MTFChartConfig, db=Depends(database.get_db)):
+        return {"valid": True}
+
+    raw["indicators"]["rsi_1h"]["parameters"]["ignored"] = True
+    with TestClient(app) as client:
+        response = client.post("/validate", json=raw)
+    assert response.status_code == 422
+    assert any(
+        e["loc"] == ["body", "indicators", "rsi_1h"] for e in response.json()["detail"]
+    )
+    session.rollback.assert_awaited_once()
+    session.commit.assert_not_called()
