@@ -3051,6 +3051,40 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mtf-temporal-decision-evidence",
+      "description": "Closed-candle calculations and immutable decision replay without rewriting strategy parameters.",
+      "files": [
+        {
+          "path": "backend/app/services/feature_engine.py",
+          "contains_all": [
+            "closed_frame",
+            "results.key_metadata"
+          ]
+        },
+        {
+          "path": "backend/app/services/mtf_replay.py",
+          "contains_all": [
+            "LEGACY_INPUTS_NOT_FROZEN",
+            "INPUT_HASH_MISMATCH"
+          ]
+        },
+        {
+          "path": "backend/tests/test_indicator_temporal.py",
+          "contains_all": [
+            "test_partial_candle_cannot_repaint_technical_values_and_envelopes",
+            "test_triggered_decision_replays_without_context_values_or_configuration_changes"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFDecisionEvidence.tsx",
+          "contains_all": [
+            "Evidências da decisão",
+            "ATR do motor"
+          ]
+        }
+      ]
     }
   ]
 }

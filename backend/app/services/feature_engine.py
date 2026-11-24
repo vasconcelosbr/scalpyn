@@ -57,7 +57,13 @@ class FeatureEngine:
             logger.warning("Insufficient data for indicator calculation")
             return {}
 
-        results: Dict[str, Any] = {}
+        from .indicator_temporal import IndicatorResults, closed_frame
+        from datetime import timezone
+        as_of = as_of or datetime.now(timezone.utc)
+        df, clock = closed_frame(df, timeframe or ('5m' if group == 'microstructure' else None), as_of)
+        if len(df) < 2:
+            return {}
+        results = IndicatorResults()
 
         # ── Per-indicator isolation: each calc runs in its own try/except so
         # that a failure in one indicator does not abort the remaining ones.
@@ -252,18 +258,28 @@ class FeatureEngine:
                 from .price_position import calculate_price_position
 
                 bollinger_config = self.config.get("bollinger", {})
-                results.update(calculate_price_position(
+                position = calculate_price_position(
                     df,
                     df_1m=df_1m,
                     as_of=as_of,
                     bollinger_period=int(bollinger_config.get("period", 20)),
                     bollinger_deviation=float(bollinger_config.get("deviation", 2.0)),
-                ))
+                )
+                results.update(position)
+                results.key_metadata.update(position.key_metadata)
 
             results.update(self._calc_directional_features(df))
 
+            if clock:
+                from .profile_runtime_config import canonical_hash
+                results.key_metadata = {key: {**clock, 'indicator_config_hash': canonical_hash(self.config),
+                                             **results.key_metadata.get(key, {})}
+                                        for key in results}
             if market_data:
-                results.update(self._apply_market_data_overrides(market_data))
+                overrides = self._apply_market_data_overrides(market_data)
+                results.update(overrides)
+                for key in overrides:
+                    results.key_metadata.pop(key, None)
 
         except Exception as e:
             logger.exception(f"Error calculating indicators: {e}")

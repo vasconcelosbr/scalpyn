@@ -236,7 +236,7 @@ async def _refresh_one_symbol(symbol: str, semaphore: asyncio.Semaphore) -> str:
 
         engine = FeatureEngine(DEFAULT_INDICATORS)
         try:
-            results = engine.calculate(df, group=SCHEDULER_GROUP) or {}
+            results = engine.calculate(df, group=SCHEDULER_GROUP, timeframe=TIMEFRAME) or {}
         except Exception as exc:
             logger.warning("[STRUCT-SCHED] FeatureEngine failed for %s: %s", symbol, exc)
             results = {}
