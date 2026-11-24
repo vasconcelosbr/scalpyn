@@ -148,7 +148,7 @@ async def test_capture_persists_structural_ema_for_profile_without_ema(monkeypat
     payload = next(json.loads(call.args[1]['payload']) for call in db.execute.await_args_list
                    if 'INSERT INTO mtf_history_observations' in str(call.args[0]))
     assert payload['analysis']==before
-    assert {p['timeframe'] for p in payload['indicators'] if p['name']=='ema50'}==set(TF_SECONDS)
+    assert {p['timeframe'] for p in payload['indicators'] if p['name']=='ema50'}==set(cfg.active_timeframes())
     assert history.chart.chart_data.await_args.kwargs=={'include_display':False}
 
 
@@ -177,4 +177,4 @@ async def test_real_chart_observer_frames_use_market_closed_flag(monkeypatch):
     enrich_observer_frames(data)
     payload = history.snapshot(data,{},cfg,HistoryConfig(),iso(now))
     assert payload['analysis']==before
-    assert {p['timeframe'] for p in payload['indicators'] if p['name']=='ema50'}==set(TF_SECONDS)
+    assert {p['timeframe'] for p in payload['indicators'] if p['name']=='ema50'}==set(cfg.active_timeframes())

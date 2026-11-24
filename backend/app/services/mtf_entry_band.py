@@ -7,8 +7,8 @@ def candidate_entry_band(analysis, frames, cfg, now):
     if not cfg.presentation or not cfg.presentation.entry_band_enabled:
         return None
     cutoff = timestamp(analysis['evaluated_at_utc'])
-    valid_until = cutoff + cfg.stale_tf_multiplier * TF_SECONDS['5m']
-    result = dict(state='UNAVAILABLE', reason=None, timeframe='1h', low=None, high=None,
+    valid_until = cutoff + cfg.stale_tf_multiplier * TF_SECONDS[cfg.stage('trigger')]
+    result = dict(state='UNAVAILABLE', reason=None, timeframe=cfg.stage('zone'), low=None, high=None,
                   support_low=None, support_high=None, atr=None, proximity_atr=cfg.zone_proximity_atr,
                   entry=None, evaluated_at=analysis['evaluated_at_utc'], valid_until=iso(valid_until),
                   config_hash=analysis['config_hash'], vetoes=list(analysis.get('vetoes', [])),
@@ -18,7 +18,7 @@ def candidate_entry_band(analysis, frames, cfg, now):
     zone = analysis.get('zone_1h')
     if not zone:
         return {**result, 'reason': 'NO_SUPPORT'}
-    low, high, atr = zone.get('low'), zone.get('high'), frames.get('1h', {}).get('atr')
+    low, high, atr = zone.get('low'), zone.get('high'), frames.get(cfg.stage('zone'), {}).get('atr')
     if any(isinstance(v, bool) or not isinstance(v, (int, float)) or not isfinite(v) or v <= 0 for v in (low, high, atr)) or low > high:
         return {**result, 'reason': 'INVALID_SUPPORT'}
     if zone.get('available_at', cutoff + 1) > cutoff:

@@ -1,5 +1,6 @@
 'use client';
 
+import { MTFJsonTools } from './MTFJsonTools';
 import { useEffect, useRef, useState } from 'react';
 import { X, SlidersHorizontal, Crosshair, Layers, Settings2, ShieldCheck } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
@@ -154,6 +155,7 @@ export function MTFSettingsDialog({config, boot, onClose, onSaved}: {config: MTF
       setErrors(invalid);
       if (Object.keys(invalid).length) {setMessage('Revise os campos indicados antes de salvar.');return;}
       setSaving(true);setMessage('');
+      await apiFetch('/mtf/config/validate',{method:'POST',body:JSON.stringify(next)});
       const saved = await apiFetch<MTFConfig>('/mtf/config',{method:'PUT',body:JSON.stringify(next)});
       onSaved(saved);
     } catch (e) {
@@ -167,6 +169,7 @@ export function MTFSettingsDialog({config, boot, onClose, onSaved}: {config: MTF
     } finally {setSaving(false);}
   };
   const renderField = (spec: FieldSpec) => {
+    if (draft.schema_version==='mtf_chart_v3' && spec.path==='atr_period') return null;
     const value = configValue(draft,spec.path);
     const inherited = spec.path==='atr_period' && value==null;
     const displayed = inherited ? (boot.inherited_atr?.enabled ? boot.inherited_atr.period : '') : value;
@@ -175,7 +178,7 @@ export function MTFSettingsDialog({config, boot, onClose, onSaved}: {config: MTF
     const issue = errors[spec.path];
     return <div className={`mtf-setting ${issue?'invalid':''}`} key={spec.path}>
       <label htmlFor={id}>{spec.label}{spec.unit && <span>{spec.unit}</span>}</label>
-      {spec.kind==='btc-timeframe' ? <select id={id} disabled={saving} value={String(value ?? '4h')} onChange={e=>update(spec.path,e.target.value)}><option value="4h">4H</option><option value="1h">1H</option></select> : spec.kind==='patterns' ? <div className="mtf-pattern-options" role="group" aria-label={spec.label}>
+      {spec.kind==='btc-timeframe' ? <select id={id} disabled={saving} value={String(value ?? '4h')} onChange={e=>update(spec.path,e.target.value)}>{(draft.schema_version==='mtf_chart_v3' ? boot.catalog?.timeframes ?? [] : ['4h','1h']).map(tf=><option key={tf} value={tf}>{tf.toUpperCase()}</option>)}</select> : spec.kind==='patterns' ? <div className="mtf-pattern-options" role="group" aria-label={spec.label}>
         {['ENGULF_BULL','PIN_BULL','MARUBOZU_BULL'].map(pattern=><label key={pattern}><input type="checkbox" disabled={saving} checked={(value as string[] ?? []).includes(pattern)} onChange={e=>update(spec.path,e.target.checked?[...(value as string[] ?? []),pattern]:(value as string[]).filter(p=>p!==pattern))}/>{patternLabels[pattern]}</label>)}
       </div> : spec.kind==='boolean' ? <select id={id} disabled={saving} value={String(value)} onChange={e=>update(spec.path,e.target.value==='true')}><option value="true">Sim</option><option value="false">Não</option></select> :
         <input id={id} disabled={saving} type="number" step={schema.type==='integer'?1:'any'} min={schema.minimum} max={schema.maximum} value={displayed==null?'':String(displayed)} aria-invalid={!!issue} aria-describedby={`${id}-hint`} onChange={e=>update(spec.path,e.target.value===''?'':Number(e.target.value))}/>}
@@ -190,9 +193,15 @@ export function MTFSettingsDialog({config, boot, onClose, onSaved}: {config: MTF
       ['armed','ARMADO',Layers],['flow','Capital e fluxo',Layers],['trigger','GATILHO',Crosshair],['vetoes','Vetos',ShieldCheck],['shared','Compartilhados',SlidersHorizontal],['advanced','Avançado',Settings2],
     ] as const).map(([key,label,Icon])=><button type="button" key={key} aria-pressed={tab===key&&!jsonOpen} onClick={()=>{if(jsonOpen){try{const parsed=JSON.parse(jsonText);if(!parsed||typeof parsed!=='object'||Array.isArray(parsed))throw new Error();const invalid=validateSettings(parsed,rootSchema);if(Object.keys(invalid).length){setErrors(invalid);setMessage('Corrija os campos do JSON antes de voltar aos formulários.');return;}setDraft(parsed);setErrors({});setJsonOpen(false);setMessage('');}catch{setMessage('Corrija o JSON antes de voltar aos formulários.');return;}}setTab(key);}}><Icon size={15}/>{label}{errorTab(key)&&<span className="mtf-error-dot" aria-label="Há campos inválidos"/>}</button>)}</nav>
     <div className="mtf-settings-body">
-      {jsonOpen ? <section className="mtf-settings-section"><h3>JSON avançado</h3><p>A mesma configuração dos formulários. Alterações só entram em vigor ao salvar.</p><textarea aria-label="Configuração MTF em JSON" spellCheck={false} value={jsonText} disabled={saving} onChange={e=>setJsonText(e.target.value)}/></section> : <>
-        {sections.filter(section=>section.tab===tab).map(section=><section className="mtf-settings-section" key={section.title}><h3>{section.title}</h3>{section.note&&<p>{section.note}</p>}<div className="mtf-settings-grid">{section.fields.map(renderField)}</div></section>)}
-        {tab==='armed' && draft.schema_version==='mtf_chart_v2' && <section className="mtf-settings-section"><h3>Janela das zonas</h3><div className="mtf-settings-grid">{['4h','1h','5m'].map(tf=>renderField(field(`zone_lookback_candles.${tf}`,`Zonas ${tf.toUpperCase()}`,'Janela de pivôs usada na versão ativa de zonas.','candles')))}</div></section>}
+      {!jsonOpen && <section className="mtf-settings-section">
+        <button type="button" className="mtf-settings-json" disabled={saving} onClick={()=>{setJsonText(JSON.stringify(draft,null,2));setJsonOpen(true);}}>JSON completo · indicadores e regras</button>
+        {boot.conversion_error && draft.schema_version!=='mtf_chart_v3' && <p role="alert">Conversão incompleta: {boot.conversion_error}. A configuração anterior permanece ativa.</p>}
+        {draft.schema_version==='mtf_chart_v3' && <p>Contrato completo do MTF. Indicadores e regras próprios, sem alterar outros módulos. ATR por timeframe em frame_atr e indicators.</p>}
+      </section>}
+      {jsonOpen ? <section className="mtf-settings-section"><h3>JSON avançado</h3><p>A mesma configuração dos formulários. Alterações só entram em vigor ao salvar.</p><MTFJsonTools text={jsonText} onText={setJsonText} catalog={boot.catalog} disabled={saving} setBusy={setSaving} onMessage={setMessage} onErrors={setErrors}/><textarea aria-label="Configuração MTF em JSON" spellCheck={false} value={jsonText} disabled={saving} onChange={e=>setJsonText(e.target.value)}/></section> : <>
+        {sections.filter(section=>section.tab===tab).map(section=><section className="mtf-settings-section" key={section.title}><h3>{section.title}</h3>{section.note&&<p>{draft.schema_version==='mtf_chart_v3' && ['armed','trigger','flow','shared'].includes(section.tab) ? 'As regras efetivas desta etapa estão no JSON completo. Estes controles editam os mesmos parâmetros. Indicadores e contexto influenciam os estados quando referenciados nas regras.' : section.note}</p>}<div className="mtf-settings-grid">{section.fields.map(renderField)}</div></section>)}
+        {tab==='armed' && (draft.schema_version==='mtf_chart_v2'||draft.zone_algorithm==='mtf_chart_v2') && <section className="mtf-settings-section"><h3>Janela das zonas</h3><div className="mtf-settings-grid">{['4h','1h','5m'].map(tf=>renderField(field(`zone_lookback_candles.${tf}`,`Zonas ${tf.toUpperCase()}`,'Janela de pivôs usada na versão ativa de zonas.','candles')))}</div></section>}
+        {draft.timeframes && <section className="mtf-settings-section"><h3>Timeframes das etapas</h3><p>Novos timeframes exigem candle_limits, presentation.visible_candles, indicators e frame_atr correspondentes no JSON.</p><div className="mtf-settings-grid">{(['structure','zone','trigger'] as const).map(role=><div key={role} className="mtf-setting"><label htmlFor={'mtf-role-'+role}>{({structure:'Estrutura',zone:'Zona',trigger:'Gatilho'})[role]}</label><select id={'mtf-role-'+role} value={draft.timeframes?.[role]} onChange={e=>update('timeframes.'+role,e.target.value)} disabled={saving}>{(boot.catalog?.timeframes??[]).map(tf=><option key={tf} value={tf}>{tf.toUpperCase()}</option>)}</select></div>)}</div><details><summary>Regras efetivas</summary><pre>{JSON.stringify(draft.rules,null,2)}</pre></details></section>}
         {tab==='shared' && <div className="mtf-settings-note">Os filtros de direção e Bitcoin e a validade dos dados ficam em Vetos. A análise continua usando candles fechados. Os campos compartilhados têm efeito nas duas etapas.</div>}
         {tab==='advanced' && <>
           <section className="mtf-settings-section"><h3>Watchlists</h3><div className="mtf-setting"><label htmlFor="mtf-default-watchlist">Watchlist inicial</label><select id="mtf-default-watchlist" value={draft.default_watchlist} disabled={saving} onChange={e=>update('default_watchlist',e.target.value)}>{boot.watchlists.map(w=><option value={w.id} key={w.id}>{w.name}</option>)}</select></div><fieldset className="mtf-pattern-options"><legend>Monitoradas pelo observador</legend>{boot.watchlists.map(w=><label key={w.id}><input type="checkbox" disabled={saving} checked={draft.monitored_watchlists.includes(w.id)} onChange={e=>update('monitored_watchlists',e.target.checked?[...draft.monitored_watchlists,w.id]:draft.monitored_watchlists.filter(id=>id!==w.id))}/>{w.name}</label>)}</fieldset></section>

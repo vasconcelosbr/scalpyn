@@ -6,7 +6,8 @@ from sqlalchemy import text
 from .profile_runtime_config import canonical_hash
 
 log = logging.getLogger(__name__)
-WINDOWS = {'4h': 240, '1h': 60, '5m': 5}
+from ..schemas.mtf_rules import DURATIONS
+WINDOWS = {tf: seconds // 60 for tf, seconds in DURATIONS.items()}
 
 CAPITAL_SQL = '''SELECT minute, buy_usdt, sell_usdt, symbols, complete_symbols, computed_at
     FROM pump_capital_flow_1m WHERE user_id=:uid AND minute>=:lo AND minute<:cutoff
@@ -72,7 +73,8 @@ def build_context(capital_rows, asset_rows, *, symbol, monitored_symbols, cutoff
         return {**out, 'confirmation': 'disabled'}
     if not 0 <= (known_at-cutoff).total_seconds() <= cfg.max_evaluation_delay_seconds:
         return {**out, 'reasons': ['evaluation_outside_flow_freshness']}
-    for tf, minutes in WINDOWS.items():
+    for tf in cfg.capital_neutral_ratio:
+        minutes = WINDOWS[tf]
         reading = summarize(capital_rows, minutes, cutoff, known_at, cfg.min_coverage, capital=True)
         if reading['state'] == 'available':
             threshold = cfg.capital_neutral_ratio[tf]
@@ -81,7 +83,7 @@ def build_context(capital_rows, asset_rows, *, symbol, monitored_symbols, cutoff
     if symbol not in monitored_symbols:
         out['asset'] = {'state': 'unavailable', 'reason': 'asset_not_in_pump_universe'}
     else:
-        out['asset'] = summarize(asset_rows, WINDOWS['5m'], cutoff, known_at, cfg.min_coverage)
+        out['asset'] = summarize(asset_rows, WINDOWS[cfg.asset_window], cutoff, known_at, cfg.min_coverage)
     asset = out['asset']
     if asset['state'] == 'available':
         asset['state'] = ('confirmed' if asset['ratio'] >= cfg.asset_min_delta and asset['buy_persistence'] >= cfg.asset_min_buy_persistence
@@ -113,9 +115,9 @@ async def load_context(db, user_id, symbol, cutoff, cfg):
         previous_timeout = await db.scalar(text('SHOW statement_timeout'))
         async with db.begin_nested():
             await db.execute(text("SELECT set_config('statement_timeout', :timeout, true)"), {'timeout': str(cfg.query_timeout_ms)})
-            capitals = (await db.execute(text(CAPITAL_SQL), {'uid':user_id,'lo':cutoff-timedelta(minutes=WINDOWS['4h']),
+            capitals = (await db.execute(text(CAPITAL_SQL), {'uid':user_id,'lo':cutoff-timedelta(minutes=max(WINDOWS[tf] for tf in cfg.capital_neutral_ratio)),
                         'cutoff':cutoff,'known_at':known_at})).mappings().all()
-            assets = (await db.execute(text(ASSET_SQL), {'symbol':symbol,'lo':cutoff-timedelta(minutes=WINDOWS['5m']),
+            assets = (await db.execute(text(ASSET_SQL), {'symbol':symbol,'lo':cutoff-timedelta(minutes=WINDOWS[cfg.asset_window]),
                       'cutoff':cutoff,'known_at':known_at})).mappings().all()
             await db.execute(text("SELECT set_config('statement_timeout', :timeout, true)"), {'timeout': previous_timeout})
         result = build_context(capitals, assets, symbol=symbol, monitored_symbols={r['symbol'] for r in envelope.get('rows',[])},

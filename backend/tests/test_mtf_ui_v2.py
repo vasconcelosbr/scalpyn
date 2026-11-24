@@ -10,7 +10,7 @@ from app.services.profile_runtime_config import canonical_hash
 
 def test_presentation_does_not_change_v1_identity_and_v2_requires_explicit_window():
     raw=experimental_preset()
-    legacy={k:v for k,v in raw.items() if k not in {'pump_flow','presentation','zone_lookback_candles','atr_period','force_patterns','rejection_patterns','veto_filters','btc_trend_timeframe'}}
+    legacy={k:v for k,v in raw.items() if k not in {'pump_flow','presentation','zone_lookback_candles','atr_period','force_patterns','rejection_patterns','veto_filters','btc_trend_timeframe','timeframes','indicators','rules','zone_algorithm','structure_ema_period','frame_atr'}}
     cfg=MTFChartConfig.model_validate(raw)
     assert canonical_hash(cfg.engine_dump())==canonical_hash(legacy)
     raw['presentation']=presentation_preset()
@@ -32,7 +32,7 @@ def test_zone_role_requires_crossing_whole_band_and_merged_touches_are_unique():
 
 
 def test_zone_window_excludes_old_and_unconfirmed_pivots_and_merges_origins():
-    raw=experimental_preset();raw.update(schema_version='mtf_chart_v2',zone_lookback_candles={tf:10 for tf in TF_SECONDS})
+    raw=experimental_preset();raw.update(schema_version='mtf_chart_v2',zone_lookback_candles={tf:10 for tf in ('4h','1h','5m')})
     cfg=MTFChartConfig.model_validate(raw)
     frame={'candles':[{'time':i*300} for i in range(50)],'atr':2,'pivots':[
         {'time':300,'price':100,'kind':'L','confirmed_at':600},
@@ -49,7 +49,7 @@ def test_zone_window_excludes_old_and_unconfirmed_pivots_and_merges_origins():
 @pytest.mark.parametrize('prefix_gap', [False, True])
 async def test_display_warmup_covers_visible_series_without_changing_engine(monkeypatch, prefix_gap):
     now=14400*100
-    raw=experimental_preset();raw['candle_limits']={tf:50 for tf in TF_SECONDS}
+    raw=experimental_preset();raw['candle_limits']={tf:50 for tf in ('4h','1h','5m')}
     cfg=MTFChartConfig.model_validate(raw)
     indicators={'ema':{'enabled':True,'periods':[9,21]},'atr':{'enabled':True,'period':14},'rsi':{'enabled':True,'period':14}}
     candles={tf:[{'time':now-(80-i)*seconds,'open':100+i*.1,'high':103+i*.1,'low':98+i*.1,'close':101+i*.1,'volume':100,'is_closed':True} for i in range(80)] for tf,seconds in TF_SECONDS.items()}
@@ -94,7 +94,7 @@ def test_delta_is_owner_and_version_scoped_and_carries_overlay_deletions():
     service._chart_snapshots.clear()
     frame={'candles':[{'time':i,'close':i} for i in range(200)],'indicators':{'ema9':[{'time':i,'value':i} for i in range(200)]},
            'patterns':[{'time':1,'pattern':'DOJI'}],'pivots':[], 'zones':[{'low':1,'high':2}]}
-    data={'symbol':'BTC_USDT','frames':{tf:deepcopy(frame) for tf in TF_SECONDS},'analysis':{'config_hash':'cfg','engine_version':'v1'},'as_of':'one'}
+    data={'symbol':'BTC_USDT','frames':{tf:deepcopy(frame) for tf in ('4h','1h','5m')},'analysis':{'config_hash':'cfg','engine_version':'v1'},'as_of':'one'}
     full=service.chart_transport(data,context={'user':'a'},since=None,max_entries=10)
     later=deepcopy(data);later['as_of']='two'
     later['analysis']['trigger_diagnostics']={'status':'ARMED','checks':[{'actual':.000001,'expected':.000002}]}

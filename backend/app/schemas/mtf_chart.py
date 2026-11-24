@@ -2,6 +2,9 @@
 from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
+from .mtf_rules import (Timeframe, DURATIONS, IndicatorInstance, StageTimeframes, RuleSet,
+                        CONTEXT_FIELDS, all_conditions, conditions, rule_uses_flow, validate_condition_types)
+
 BullPattern = Literal['ENGULF_BULL', 'PIN_BULL', 'MARUBOZU_BULL']
 LEGACY_FORCE_PATTERNS = ['ENGULF_BULL', 'MARUBOZU_BULL']
 LEGACY_REJECTION_PATTERNS = ['PIN_BULL', 'ENGULF_BULL']
@@ -25,7 +28,7 @@ class MTFPresentation(BaseModel):
     target_pct: float = Field(default=1, gt=0)
     fear_greed: MTFFearGreedConfig | None = None
     entry_band_enabled: StrictBool | None = None
-    visible_candles: dict[Literal['4h', '1h', '5m'], int]
+    visible_candles: dict[Timeframe, int]
     panel_heights: dict[Literal['price', 'volume', 'rsi', 'adx', 'other'], int]
     default_indicators: list[str]
     markers_max: int = Field(ge=1, le=100)
@@ -43,7 +46,7 @@ class MTFPresentation(BaseModel):
 
     @model_validator(mode='after')
     def complete(self):
-        if set(self.visible_candles) != {'4h', '1h', '5m'} or any(v < 10 or v > 1000 for v in self.visible_candles.values()):
+        if not {'4h', '1h', '5m'} <= set(self.visible_candles) or any(v < 10 or v > 1000 for v in self.visible_candles.values()):
             raise ValueError('VISIBLE_CANDLES_INVALID')
         if set(self.panel_heights) != {'price', 'volume', 'rsi', 'adx', 'other'} or any(v < 60 or v > 1200 for v in self.panel_heights.values()):
             raise ValueError('PANEL_HEIGHTS_INVALID')
@@ -93,16 +96,19 @@ class MTFPumpFlowConfig(BaseModel):
     max_source_age_seconds: int = Field(ge=1, le=3600)
     max_evaluation_delay_seconds: int = Field(ge=1, le=3600)
     query_timeout_ms: int = Field(ge=100, le=10000)
-    capital_neutral_ratio: dict[Literal['4h', '1h', '5m'], Annotated[float, Field(gt=0, le=1)]]
-    require_capital: dict[Literal['4h', '1h', '5m'], StrictBool]
+    capital_neutral_ratio: dict[Timeframe, Annotated[float, Field(gt=0, le=1)]]
+    require_capital: dict[Timeframe, StrictBool]
+    asset_window: Timeframe = '5m'
     asset_min_delta: float = Field(gt=0, le=1)
     asset_min_buy_persistence: float = Field(gt=0, le=1)
 
     @model_validator(mode='after')
     def complete(self):
         for values in (self.capital_neutral_ratio, self.require_capital):
-            if set(values) != {'4h', '1h', '5m'}:
+            if not {'4h', '1h', '5m'} <= set(values):
                 raise ValueError('CAPITAL_WINDOWS_REQUIRED')
+        if set(self.require_capital) != set(self.capital_neutral_ratio):
+            raise ValueError('CAPITAL_WINDOWS_MISMATCH')
         if any(not 0 < value <= 1 for value in self.capital_neutral_ratio.values()):
             raise ValueError('CAPITAL_RATIO_OUT_OF_RANGE')
         return self
@@ -121,21 +127,27 @@ def pump_flow_preset() -> dict:
 
 class MTFChartConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
-    schema_version: Literal["mtf_chart_v1", "mtf_chart_v2"]
+    schema_version: Literal["mtf_chart_v1", "mtf_chart_v2", "mtf_chart_v3"]
     presentation: MTFPresentation | None = None
     pump_flow: MTFPumpFlowConfig | None = None
     veto_filters: MTFVetoFilters = Field(default_factory=MTFVetoFilters)
-    btc_trend_timeframe: Literal["4h", "1h"] = "4h"
+    btc_trend_timeframe: Timeframe = "4h"
+    timeframes: StageTimeframes | None = None
+    indicators: dict[str, IndicatorInstance] | None = None
+    frame_atr: dict[Timeframe, str] | None = None
+    rules: RuleSet | None = None
+    zone_algorithm: Literal['mtf_chart_v1', 'mtf_chart_v2'] | None = None
+    structure_ema_period: int = Field(default=50, ge=1, le=1000)
     # None retains the legacy global ATR until the settings are explicitly saved.
     atr_period: int | None = Field(default=None, ge=1)
     force_patterns: list[BullPattern] = Field(default_factory=lambda: list(LEGACY_FORCE_PATTERNS), min_length=1)
     rejection_patterns: list[BullPattern] = Field(default_factory=lambda: list(LEGACY_REJECTION_PATTERNS), min_length=1)
-    zone_lookback_candles: dict[Literal['4h', '1h', '5m'], int] | None = None
+    zone_lookback_candles: dict[Timeframe, int] | None = None
     enabled: bool
     calibrated: Literal[False]
     default_watchlist: str
     monitored_watchlists: list[str]
-    candle_limits: dict[str, int]
+    candle_limits: dict[Timeframe, int]
     poll_seconds: int = Field(ge=5, le=300)
     stale_tf_multiplier: float = Field(ge=1, le=10)
     max_assets_per_watchlist: int = Field(ge=1, le=100)
@@ -175,10 +187,12 @@ class MTFChartConfig(BaseModel):
 
     @model_validator(mode="after")
     def complete(self):
-        if set(self.candle_limits) != {"4h", "1h", "5m"}:
+        if self.schema_version != "mtf_chart_v3" and self.btc_trend_timeframe not in ("4h","1h"):
+            raise ValueError("LEGACY_BTC_TIMEFRAME_UNSUPPORTED")
+        if self.schema_version != "mtf_chart_v3" and set(self.candle_limits) != {"4h", "1h", "5m"}:
             raise ValueError("CANDLE_LIMITS_REQUIRED_FOR_ALL_TIMEFRAMES")
-        if self.schema_version == 'mtf_chart_v2':
-            if not self.zone_lookback_candles or set(self.zone_lookback_candles) != {'4h','1h','5m'}:
+        if self.schema_version == 'mtf_chart_v2' or self.zone_algorithm == 'mtf_chart_v2':
+            if not self.zone_lookback_candles or set(self.zone_lookback_candles) != set(self.candle_limits):
                 raise ValueError('ZONE_LOOKBACK_REQUIRED')
             if any(v < 1 or v > self.candle_limits[k] for k,v in self.zone_lookback_candles.items()):
                 raise ValueError('ZONE_LOOKBACK_OUT_OF_RANGE')
@@ -189,14 +203,70 @@ class MTFChartConfig(BaseModel):
         expected = {"trend", "force", "zone", "rejection", "trigger", "volume", "rr"}
         if set(self.score_weights) != expected or any(v < 0 for v in self.score_weights.values()):
             raise ValueError("SCORE_WEIGHTS_INCOMPLETE")
-        if self.min_score > sum(self.score_weights.values()) or not self.trigger_patterns:
+        if self.min_score > sum(self.score_weights.values()) + (sum(r.points for r in self.rules.scoring) if self.rules else 0) or not self.trigger_patterns:
             raise ValueError("SCORE_OR_TRIGGERS_INVALID")
         if self.rr_bonus_threshold < self.min_rr_net:
             raise ValueError("RR_BONUS_BELOW_MINIMUM")
+        if self.schema_version == 'mtf_chart_v3':
+            if self.timeframes is None or self.indicators is None or self.rules is None or self.zone_algorithm is None or self.frame_atr is None:
+                raise ValueError('COMPLETE_MTF_CONTRACT_REQUIRED')
+            if self.atr_period is not None: raise ValueError('V3_ATR_PERIOD_IS_DEFINED_BY_FRAME_ATR_INDICATORS')
+            needed = set(self.timeframes.model_dump().values()) | {self.btc_trend_timeframe, '4h', '1h', '5m'}
+            needed |= {i.timeframe for i in self.indicators.values() if i.enabled}
+            if not needed <= set(self.candle_limits): raise ValueError('CANDLE_LIMIT_REQUIRED_FOR_CONFIGURED_TIMEFRAME')
+            if self.presentation and not needed <= set(self.presentation.visible_candles): raise ValueError('VISIBLE_CANDLES_REQUIRED_FOR_CONFIGURED_TIMEFRAME')
+            for key, indicator in self.indicators.items():
+                if not key or '.' in key: raise ValueError('INDICATOR_ID_MUST_NOT_CONTAIN_DOTS')
+                if indicator.enabled and indicator.sample_window >= self.candle_limits[indicator.timeframe]:
+                    raise ValueError('INDICATOR_HISTORY_TOO_SHORT:'+key)
+            if set(self.frame_atr) != set(self.candle_limits): raise ValueError('FRAME_ATR_REQUIRED_FOR_ALL_TIMEFRAMES')
+            for tf,key in self.frame_atr.items():
+                instance = self.indicators.get(key)
+                if not instance or not instance.enabled or instance.family!='atr' or instance.timeframe!=tf:
+                    raise ValueError('INVALID_FRAME_ATR:'+tf)
+            ids = set()
+            for root in [self.rules.armed, self.rules.trigger, *self.rules.vetoes, *(s.when for s in self.rules.scoring)]:
+                leaves = list(conditions(root))
+                if root in (self.rules.armed, self.rules.trigger) and not any(c.enabled for c in leaves): raise ValueError('RULE_GROUP_REQUIRES_ENABLED_CONDITION')
+                for c in leaves:
+                    validate_condition_types(c)
+                    if c.id in ids: raise ValueError('DUPLICATE_CONDITION_ID:'+c.id)
+                    ids.add(c.id)
+                    for operand in (c.left,c.right):
+                        ref = operand.ref
+                        if ref and ref.startswith('indicators.'):
+                            key = ref.split('.',1)[1]
+                            if key not in self.indicators or (c.enabled and not self.indicators[key].enabled):
+                                raise ValueError('INDICATOR_REFERENCE_UNAVAILABLE:'+key)
+                        elif ref and ref not in CONTEXT_FIELDS:
+                            raise ValueError('UNKNOWN_CONDITION_REFERENCE:'+ref)
+                        if c.operator.startswith('crosses_') and ref and not ref.startswith('indicators.'):
+                            raise ValueError('CROSS_REQUIRES_INDICATOR_SERIES')
+                        if ref and ref.startswith('flow.capital.') and (not self.pump_flow or ref.split('.')[2] not in self.pump_flow.capital_neutral_ratio):
+                            raise ValueError('FLOW_WINDOW_NOT_CONFIGURED')
+            score_ids = [r.id for r in self.rules.scoring]
+            if len(set(score_ids)) != len(score_ids): raise ValueError('DUPLICATE_SCORE_ID')
+            if rule_uses_flow(self.rules) and (not self.pump_flow or not self.pump_flow.enabled):
+                raise ValueError('FLOW_RULE_REQUIRES_ENABLED_SOURCE')
+        elif any(value is not None for value in (self.timeframes,self.indicators,self.rules,self.zone_algorithm,self.frame_atr)):
+            raise ValueError('ADVANCED_RULES_REQUIRE_V3')
         return self
+
+    def stage(self, name):
+        return getattr(self.timeframes, name) if self.timeframes else {'structure':'4h','zone':'1h','trigger':'5m'}[name]
+
+    def active_timeframes(self):
+        return list(self.candle_limits) if self.schema_version == 'mtf_chart_v3' else ['4h','1h','5m']
 
     def engine_dump(self):
         data = self.model_dump(exclude={'presentation', 'pump_flow'})
+        if self.schema_version == 'mtf_chart_v3':
+            data.pop('structure_ema_period', None)
+            for instance in data['indicators'].values(): instance.pop('display', None)
+            if rule_uses_flow(self.rules): data['pump_flow'] = self.pump_flow.model_dump()
+            return data
+        for key in ('timeframes','indicators','rules','zone_algorithm','structure_ema_period','frame_atr'):
+            data.pop(key, None)
         # MTF_BTC_TIMEFRAME_V1: legacy/default 4h keeps the frozen identity.
         if self.btc_trend_timeframe == "4h":
             data.pop("btc_trend_timeframe")
@@ -246,7 +316,7 @@ class MTFPreferences(BaseModel):
     aligned_only: bool
     last_symbol: str | None = None
     last_watchlist: str | None = None
-    last_timeframe: Literal['4h','1h','5m'] | None = None
+    last_timeframe: Timeframe | None = None
     enabled_indicators: list[str] | None = None
     show_patterns: bool = True
     show_pivots: bool = True

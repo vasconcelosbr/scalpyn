@@ -2986,9 +2986,9 @@
         {
           "path": "frontend/components/mtf/MTFStructurePanel.tsx",
           "contains_all": [
-            "Estrutura 4H",
+            "Estrutura {structureTf}",
             "Invalidação estrutural",
-            "EMA50",
+            "EMA${emaPeriod}",
             "Conflito MTF"
           ]
         },
@@ -3011,6 +3011,43 @@
           "path": "frontend/lib/mtfMembership.test.ts",
           "contains_all": [
             "racing chart 404 cannot declare removal"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mtf-complete-json-v3",
+      "description": "User-owned MTF indicator instances, timeframes and declarative E/OU rules with validated persistence and closed-candle evaluation.",
+      "files": [
+        {
+          "path": "backend/app/services/mtf_chart_v3.py",
+          "contains_all": [
+            "def calculate_frames",
+            "mtf_indicator_identity",
+            "valid_times"
+          ]
+        },
+        {
+          "path": "backend/app/api/mtf_chart.py",
+          "contains_all": [
+            "/config/validate",
+            "effective_config"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_complete_json.py",
+          "contains_all": [
+            "test_conversion_preserves_original_and_decision",
+            "test_cross_alignment_excludes_future_and_gaps",
+            "test_validate_is_read_only_and_checks_ownership"
+          ]
+        },
+        {
+          "path": "frontend/components/mtf/MTFJsonTools.tsx",
+          "contains_all": [
+            "Validar sem salvar",
+            "Importar JSON",
+            "Exportar JSON"
           ]
         }
       ]

@@ -20,12 +20,13 @@ def structure_context(data, cfg, *, source='chart', now=None):
     except (KeyError, TypeError, ValueError):
         return None
     now = now if now is not None else datetime.now(timezone.utc).timestamp()
-    expires = min(at, cutoff) + cfg.stale_tf_multiplier * TF_SECONDS['5m']
+    expires = min(at, cutoff) + cfg.stale_tf_multiplier * TF_SECONDS[cfg.stage('trigger')]
     if now >= expires or at > now or cutoff > at:
         return None
     result = dict(source=source, as_of=iso(at), evaluated_at=iso(cutoff), valid_until=iso(expires),
-                  config_hash=analysis['config_hash'], profile_id=analysis.get('profile_id'), frames={})
-    for tf, duration in TF_SECONDS.items():
+                  config_hash=analysis['config_hash'], stage_timeframes={k:cfg.stage(k) for k in ('structure','zone','trigger')}, ema_period=cfg.structure_ema_period, profile_id=analysis.get('profile_id'), frames={})
+    for tf in cfg.active_timeframes():
+        duration = TF_SECONDS[tf]
         frame = data.get('frames', {}).get(tf, {})
         closed = [c for c in frame.get('candles', []) if c.get('closed') is True and c['time'] + duration <= cutoff]
         last = closed[-1] if closed else None
@@ -35,9 +36,9 @@ def structure_context(data, cfg, *, source='chart', now=None):
         points = [dict(p) for p in frame.get('pivots', []) if p.get('confirmed_at', cutoff + 1) <= cutoff and positive(p.get('price'))]
         # Reuse the existing classifier. Initial H/L alone cannot establish structure.
         complete = any(p['label'] in ('HH', 'LH') for p in points) and any(p['label'] in ('HL', 'LL') for p in points)
-        direction = (analysis.get('context_4h') or {}).get('trend') if tf == '4h' else trend(points) if complete else None
+        direction = (analysis.get('context_4h') or {}).get('trend') if tf == cfg.stage('structure') else trend(points) if complete else None
         atr = positive(frame.get('atr'))
-        ema = next((positive(p.get('value')) for p in frame.get('indicators', {}).get(STRUCTURE_EMA_NAME, []) if p['time'] == last['time']), None)
+        ema = next((positive(p.get('value')) for p in frame.get('indicators', {}).get('ema'+str(cfg.structure_ema_period), []) if p['time'] == last['time']), None)
         close = positive(last.get('close'))
         live = next((dict(c) for c in reversed(frame.get('candles', [])) if c.get('closed') is False and c['time'] <= at < c['time'] + duration), None)
         change = ((live['close'] / live['open']) - 1) * 100 if live and positive(live.get('open')) and positive(live.get('close')) else None
@@ -48,10 +49,10 @@ def structure_context(data, cfg, *, source='chart', now=None):
             atr=atr, ema50=ema, closed_close=close, closed_at=iso(last['time'] + duration),
             extension_atr=(close - ema) / atr if close and ema and atr else None,
             live_candle=live, live_change_pct=change)
-    recent = data.get('frames', {}).get('5m', {}).get('candles', [])
+    recent = data.get('frames', {}).get(cfg.stage('trigger'), {}).get('candles', [])
     latest = recent[-1] if recent else None
-    price = positive(latest.get('close')) if latest and latest['time'] <= at and at - (latest['time'] + TF_SECONDS['5m']) <= cfg.stale_tf_multiplier * TF_SECONDS['5m'] else None
-    h4 = result['frames']['4h']
+    price = positive(latest.get('close')) if latest and latest['time'] <= at and at - (latest['time'] + TF_SECONDS[cfg.stage('trigger')]) <= cfg.stale_tf_multiplier * TF_SECONDS[cfg.stage('trigger')] else None
+    h4 = result['frames'][cfg.stage('structure')]
     direction = h4.get('trend')
     pivot = h4.get('last_hl') if direction == 'UP' else h4.get('last_lh') if direction == 'DOWN' else None
     result.update(current_price=price, current_price_source='latest_5m_candle_close' if price else None,
@@ -59,7 +60,7 @@ def structure_context(data, cfg, *, source='chart', now=None):
     conflicts = []
     complete = direction is not None
     capital = (analysis.get('pump_flow') or {}).get('capital') or {}
-    for tf in ('1h', '5m'):
+    for tf in dict.fromkeys((cfg.stage('zone'), cfg.stage('trigger'))):
         lower = result['frames'][tf].get('trend')
         complete = complete and lower is not None
         if direction and lower and lower != direction:

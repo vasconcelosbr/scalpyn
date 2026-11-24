@@ -1,4 +1,4 @@
-export type Timeframe = '4h' | '1h' | '5m';
+export type Timeframe = '1m' | '5m' | '15m' | '1h' | '4h' | '1d';
 export type MTFStatus = 'NO_TRADE' | 'WAIT' | 'ARMED' | 'TRIGGERED';
 export interface Candle { time: number; open: number; high: number; low: number; close: number; volume: number; closed: boolean }
 export interface Point { time: number; value: number }
@@ -10,10 +10,11 @@ export interface StructureFrame {
   closed_at:string|null; extension_atr:number|null; live_candle:Candle|null; live_change_pct:number|null;
 }
 export interface StructureContext {
+  stage_timeframes?: StageTimeframes; ema_period?: number;
   source:'chart'|'observation'; as_of:string; evaluated_at:string; valid_until:string; config_hash:string;
-  profile_id:string|null; frames:Record<Timeframe,StructureFrame>; current_price:number|null;
+  profile_id:string|null; frames:Record<'4h'|'1h'|'5m',StructureFrame> & Partial<Record<Timeframe,StructureFrame>>; current_price:number|null;
   current_price_source:string|null; invalidation:Pivot|null; invalidation_distance_atr:number|null;
-  conflict:boolean|null; conflicts:{kind:'structure'|'flow';timeframe:'1h'|'5m';state:string;sequence:string[];ratio:number|null}[];
+  conflict:boolean|null; conflicts:{kind:'structure'|'flow';timeframe:Timeframe;state:string;sequence:string[];ratio:number|null}[];
   operational_effect:false;
 }
 export interface Zone { type: string; low: number; high: number; touches: number; available_at: number; distance_atr?: number; in_zone?: boolean; rejection?: boolean }
@@ -22,8 +23,8 @@ export interface Plan { side: string; entry_type: string; entry: number; stop: n
 export type DiagnosticState = 'PASS' | 'FAIL' | 'DISABLED' | 'UNAVAILABLE' | 'WAITING';
 export interface TriggerCheck {
   id: string; label: string; actual: number | string | boolean | null;
-  operator: string; expected: number | string | boolean | null; unit: string;
-  role: 'required' | 'veto' | 'score'; timeframe: Timeframe | null;
+  operator: string; expected: number | string | boolean | number[] | null; unit: string;
+  role: 'required' | 'veto' | 'score' | 'context'; timeframe: Timeframe | null;
   state: DiagnosticState; gap: number | null; note: string | null;
   points?: number; maximum_points?: number;
 }
@@ -33,10 +34,14 @@ export interface TriggerDiagnostics {
   checks: TriggerCheck[];
   patterns: { pattern: string; state: DiagnosticState; conditions: TriggerCheck[] }[];
 }
+export interface StageTimeframes { structure: Timeframe; zone: Timeframe; trigger: Timeframe }
 export interface Analysis {
-  btc_trend_timeframe?: '4h' | '1h';
+  stage_results?: {armed:boolean;trigger:boolean};
+  stage_timeframes?: StageTimeframes;
+  rules_diagnostics?: TriggerCheck[];
+  btc_trend_timeframe?: Timeframe;
   btc_context?: {
-    version: 'mtf_btc_context_v1'; active_timeframe: '4h' | '1h'; veto_enabled: boolean; exempt: boolean;
+    version: 'mtf_btc_context_v1'; active_timeframe: Timeframe; veto_enabled: boolean; exempt: boolean;
     frames: Record<'4h' | '1h', {trend: 'UP' | 'DOWN' | 'RANGE' | null; reason: string | null;
       pivots_used: Pivot[]; reference_candle: {open_at: string; close_at: string; close: number} | null}>;
   };
@@ -51,12 +56,20 @@ export interface Analysis {
   plan: Plan | null; score: { total: number; raw?: number | null; maximum: number; components: Record<string, number>; calibrated: false };
   vetoes: string[]; explanation: string[]; unavailable_profile_indicators: string[]; spread_pct: number | null; btc_trend: string | null;
 }
-export interface ChartData { structure_context?: StructureContext | null; symbol: string; frames: Record<Timeframe, Frame>; analysis: Analysis; as_of: string; profile: Profile | null; indicator_config: Record<string, unknown>; cursor?: string; transport?: 'full'|'delta'; price_format?: {precision: number; min_move: number; source: string} | null }
+export interface ChartData { structure_context?: StructureContext | null; symbol: string; frames: Record<string, Frame>; analysis: Analysis; as_of: string; profile: Profile | null; indicator_config: Record<string, unknown>; cursor?: string; transport?: 'full'|'delta'; price_format?: {precision: number; min_move: number; source: string} | null }
 export interface Profile { id: string; name: string; default_timeframe?: string }
 export interface Watchlist { id: string; name: string; profile_id?: string }
 export interface Asset { structure_context?: StructureContext | null; symbol: string; current_price?: number | null; price_snapshot_at?: string | null; alpha_score?: number | null; profile_id?: string; mtf?: Analysis | null }
+export interface IndicatorInstance { family:string; output:string; parameters:Record<string,unknown>; timeframe:Timeframe; enabled:boolean; display:boolean; sample_window:number }
+export interface RuleOperand { ref?:string; value?:number|string|boolean|number[] }
+export interface RuleCondition { id:string; label:string; enabled?:boolean; left:RuleOperand; operator:string; right:RuleOperand }
+export interface RuleGroup { logic:'AND'|'OR'; conditions:(RuleCondition|RuleGroup)[] }
 export interface MTFConfig {
-  btc_trend_timeframe?: '4h' | '1h';
+  timeframes?: StageTimeframes | null;
+  indicators?: Record<string,IndicatorInstance> | null;
+  frame_atr?: Partial<Record<Timeframe,string>> | null;
+  rules?: {armed:RuleGroup;trigger:RuleGroup;vetoes:(RuleCondition|RuleGroup)[];scoring:{id:string;points:number;when:RuleGroup}[]} | null;
+  btc_trend_timeframe?: Timeframe;
   schema_version: string; enabled: boolean; calibrated: false; default_watchlist: string; monitored_watchlists: string[];
   poll_seconds: number; history_page_size: number; candle_limits: Record<Timeframe, number>; stale_tf_multiplier: number;
   presentation?: Presentation;
@@ -75,7 +88,7 @@ export interface Presentation {
 }
 export interface EntryCandidate {
   state: 'WAITING' | 'BLOCKED' | 'CONFIRMED' | 'UNAVAILABLE'; reason: string | null;
-  timeframe: '1h'; low: number | null; high: number | null; support_low: number | null; support_high: number | null;
+  timeframe: Timeframe; low: number | null; high: number | null; support_low: number | null; support_high: number | null;
   atr: number | null; proximity_atr: number; entry: number | null; evaluated_at: string; valid_until: string;
   config_hash: string; vetoes: string[]; operational_effect: false;
 }
@@ -86,7 +99,7 @@ export interface Preferences { theme: 'dark' | 'light'; timezone: 'America/Sao_P
   show_target?: boolean;
 }
 export interface ConfigSchema { type?: string; $ref?: string; $defs?: Record<string, ConfigSchema>; properties?: Record<string, ConfigSchema>; anyOf?: ConfigSchema[]; items?: ConfigSchema; additionalProperties?: ConfigSchema | boolean; minimum?: number; maximum?: number; exclusiveMinimum?: number; exclusiveMaximum?: number; enum?: unknown[]; required?: string[]; minItems?: number }
-export interface Bootstrap { pump_flow_preset?: Record<string, unknown>; config: MTFConfig | null; preset: MTFConfig; presentation_preset: Presentation; watchlists: Watchlist[]; profiles: Profile[]; preferences: Partial<Preferences>; inherited_atr?: { enabled?: boolean; period?: number } | null; config_schema?: ConfigSchema }
+export interface Bootstrap { effective_preset?: MTFConfig | null; effective_config?: MTFConfig|null; conversion_error?:string|null; catalog?: {indicators:Record<string,{parameters:string[];outputs:string[]}>;timeframes:Timeframe[];context_fields:string[];operators:string[]}; pump_flow_preset?: Record<string, unknown>; config: MTFConfig | null; preset: MTFConfig; presentation_preset: Presentation; watchlists: Watchlist[]; profiles: Profile[]; preferences: Partial<Preferences>; inherited_atr?: { enabled?: boolean; period?: number } | null; config_schema?: ConfigSchema }
 export interface HistoryItem { evaluation: Analysis; observed_at: string; shadow: { status: string; pnl_pct?: number | null; pnl_usdt?: number | null; fill?: number; ambiguous?: boolean; reason?: string } | null }
 export interface MTFReport { groups: { pattern: string; config_hash: string; n: number; mean_pct: number; ambiguous: number; sample_sufficient: boolean; confidence_interval: [number,number] | null; fee_per_side_pct: number; slippage_pct: number }[]; confidence_level: number; formula: string; origin: string; method: string }
 export const statusLabels: Record<MTFStatus, string> = { NO_TRADE: 'SEM TRADE', WAIT: 'AGUARDAR', ARMED: 'ARMADO', TRIGGERED: 'GATILHO' };
@@ -160,6 +173,7 @@ export interface FlowReading {
   window_start?: string; window_end?: string;
 }
 export interface PumpFlowContext {
+  config?: {asset_window?: Timeframe};
   confirmation: string; capital: Partial<Record<Timeframe, FlowReading>>; asset: Partial<FlowReading>;
   captured_at?: string; cutoff?: string; config_hash?: string; reasons?: string[];
 }

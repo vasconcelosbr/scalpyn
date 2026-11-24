@@ -89,3 +89,31 @@ test('flow-only saves preserve inherited ATR, scoring and veto configuration',()
   assert.deepEqual(changed.pump_flow,{enabled:true,asset_min_delta:.03});
   assert.deepEqual(withFlow.pump_flow_preset,{enabled:false,asset_min_delta:.03});
 });
+
+
+test('complete JSON draft uses effective conversion without mutating saved legacy config',()=>{
+  const complete={...structuredClone(config),schema_version:'mtf_chart_v3',atr_period:null,
+    timeframes:{structure:'4h',zone:'1h',trigger:'5m'},indicators:{},frame_atr:{},
+    rules:{armed:{logic:'AND',conditions:[]},trigger:{logic:'OR',conditions:[]},vetoes:[],scoring:[]}} as MTFConfig;
+  const context={...boot,effective_config:complete,effective_preset:{...complete,min_score:0}};
+  const draft=settingsDraft(config,context);
+  assert.equal(draft.schema_version,'mtf_chart_v3');
+  assert.equal(config.schema_version,'mtf_chart_v1');
+  const changed=withConfigValue(draft,'timeframes.trigger','1h');
+  assert.equal(settingsForSave(changed,config,context).timeframes?.trigger,'1h');
+  assert.equal(settingsForSave(changed,config,context).atr_period,null);
+  assert.equal(settingsDraft(null,context).min_score,0);
+  assert.equal(settingsDraft(changed,context).timeframes?.trigger,'1h');
+});
+
+test('recursive JSON schema accepts all operand alternatives and reports invalid nested values',()=>{
+  const schema:ConfigSchema={type:'object',properties:{rules:{$ref:'#/$defs/Group'}},$defs:{
+    Group:{type:'object',required:['conditions'],additionalProperties:false,properties:{conditions:{type:'array',items:{anyOf:[{$ref:'#/$defs/Leaf'},{$ref:'#/$defs/Group'}]}}}},
+    Leaf:{type:'object',required:['value'],additionalProperties:false,properties:{value:{anyOf:[{type:'number'},{type:'string'},{type:'boolean'},{type:'array',items:{type:'number'}}]}}}
+  }};
+  const valid={...config,rules:{conditions:[{value:true},{conditions:[{value:'UP'},{value:[1,2]}]}]}} as unknown as MTFConfig;
+  assert.deepEqual(validateSettings(valid,schema),{});
+  const invalid=structuredClone(valid) as unknown as {rules:{conditions:unknown[]}};
+  invalid.rules.conditions=[{conditions:[{value:{invalid:true}}]}];
+  assert.ok(Object.keys(validateSettings(invalid as unknown as MTFConfig,schema)).some(k=>k.includes('rules.conditions')));
+});

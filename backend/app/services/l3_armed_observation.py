@@ -46,7 +46,7 @@ def reading(item, row, *, now, cfg, profile_hashes, indicator_identity):
         try:
             observed = timestamp(row['observed_at'])
             closed = timestamp(analysis.get('candle_close_at_utc'))
-            expires = min(observed, closed) + timedelta(seconds=cfg.stale_tf_multiplier * TF_SECONDS['5m'])
+            expires = min(observed, closed) + timedelta(seconds=cfg.stale_tf_multiplier * TF_SECONDS[cfg.stage('trigger')])
             result['valid_until'] = expires.isoformat()
             if observed > now or closed > now:
                 reasons.append('INVALID_SOURCE_TIME')
@@ -57,7 +57,7 @@ def reading(item, row, *, now, cfg, profile_hashes, indicator_identity):
             reasons.append('MISSING_SOURCE_TIME')
     if not indicator_identity or analysis.get('indicator_identity') != indicator_identity:
         reasons.append('INDICATOR_CONFIG_CHANGED')
-    if analysis.get('engine_version') != ENGINE_VERSION:
+    if analysis.get('engine_version') != (cfg.schema_version if cfg else ENGINE_VERSION):
         reasons.append('ENGINE_CHANGED')
     if row['quality'] != 'current':
         reasons.append('EVALUATION_DATA_PENDING')
@@ -92,6 +92,9 @@ async def load_l3_armed_display(db, *, user_id, include_analysis=False):
                         config_hash=canonical_hash(configs[0].config_json))
         if cfg is not None:
             _, identity = effective_indicators(configs[0].config_json, identity, cfg)
+    if cfg is not None and cfg.schema_version == 'mtf_chart_v3':
+        from .mtf_indicator_config import mtf_indicator_identity
+        identity = mtf_indicator_identity(cfg, user_id)
     # Select latest first, then validate. Never resurrect an older ARMED reading.
     # MTF_LATEST_IDS_FIRST: do not extract/sort historical JSON before deduplication.
     rows = (await db.execute(text('''WITH latest AS MATERIALIZED (
