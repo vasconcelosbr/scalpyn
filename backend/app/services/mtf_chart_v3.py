@@ -111,7 +111,10 @@ def calculate_frames(raw, cfg, cutoff):
             frame["indicator_sample_count"] = core.sample_window
             # Structural display uses the explicit MTF period and the same sample domain.
             ema_name = "ema" + str(cfg.structure_ema_period)
-            if ema_name not in frame["indicators"]:
+            if (
+                ema_name not in frame["indicators"]
+                and core.sample_window >= cfg.structure_ema_period
+            ):
                 frame["indicators"].update(
                     indicator_history(
                         candles,
