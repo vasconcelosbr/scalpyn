@@ -187,9 +187,11 @@ def envelop_results(
             out[k] = {"value": None, "source": "unknown", "confidence": 0.0, "status": "NO_DATA", **metadata}
         else:
             out[k] = {"value": v, "source": src, "confidence": conf, "status": "VALID", **metadata}
-    # Per-value calculation clocks override row clocks. Live overrides never
-    # inherit candle provenance merely because they share a persistence row.
-    resolved_metadata = {**getattr(results, 'key_metadata', {}), **(key_metadata or {})}
+    # Merge producer identities with the clock/reference of each calculation.
+    # A row-level identity must not discard the per-value distance reference.
+    resolved_metadata = {k: dict(v) for k, v in getattr(results, 'key_metadata', {}).items()}
+    for key, identity in (key_metadata or {}).items():
+        resolved_metadata[key] = {**resolved_metadata.get(key, {}), **identity}
     for key, identity in resolved_metadata.items():
         if key in out:
             out[key].update(identity)

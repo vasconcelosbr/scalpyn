@@ -25,7 +25,7 @@ def test_partial_candle_cannot_repaint_technical_values_and_envelopes():
     for key, value in expected.items():
         assert actual[key] == value, key
     assert actual['close_5m'] == 101
-    envelopes = envelop_results(actual)
+    envelopes = envelop_results(actual, key_metadata={'ema50_distance_pct': {'producer_version': 'test'}})
     assert envelopes['close_5m']['candle_close_time'] == cutoff.isoformat()
     assert 'source_timestamp' not in envelopes['spread_pct']
     for key in ('ema50_distance_pct','vwap_distance_pct','recent_high_5m_distance_pct'):
