@@ -16,6 +16,7 @@ from test_strategy_settings_service import aggregate
 def recovery_client(aggregate, monkeypatch):
     uid, db = aggregate
     monkeypatch.setenv('RECOVERY_OBSERVATION_ONLY', '1')
+    monkeypatch.setenv('RECOVERY_BLOCK_APP_EDITS', '1')
     invalidate = AsyncMock(return_value=True)
     monkeypatch.setattr('app.services.strategy_settings_service.config_service.invalidate_cache', invalidate)
     source = ast.parse((Path(__file__).parents[1] / 'app/main.py').read_text(encoding='utf-8'))

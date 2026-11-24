@@ -7,6 +7,38 @@
   },
   "required_features": [
     {
+      "id": "recovery-edits-independent-of-orders",
+      "description": "App edits are unlocked by default while observation mode still blocks exchange writes.",
+      "files": [
+        {
+          "path": "backend/app/main.py",
+          "contains_all": [
+            "RECOVERY_EDITS_INDEPENDENT",
+            "if _os.environ.get(\"RECOVERY_BLOCK_APP_EDITS\") == \"1\":"
+          ]
+        },
+        {
+          "path": "backend/app/services/strategy_settings_service.py",
+          "contains_all": [
+            "if os.environ.get(\"RECOVERY_BLOCK_APP_EDITS\") != \"1\":"
+          ]
+        },
+        {
+          "path": "backend/tests/test_recovery_unlocked_edits.py",
+          "contains_all": [
+            "test_exchange_save_keeps_auth_and_encrypts_credentials",
+            "test_strategy_edits_save_and_invalidate_cache_with_orders_blocked"
+          ]
+        },
+        {
+          "path": "backend/app/exchange_adapters/gate_adapter.py",
+          "contains_all": [
+            "RECOVERY_GATE_WRITE_BLOCK"
+          ]
+        }
+      ]
+    },
+    {
       "id": "pump-strong-readonly-export",
       "description": "Dedicated machine key exports all final strong-long arrows from the complete cycle, without writes or engine execution.",
       "files": [
