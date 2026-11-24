@@ -432,7 +432,9 @@ class _RecoveryObservationGate(_BaseHTTPMiddleware):
         return _JSONResponse(status_code=403, content={"detail": "Recovery observation mode"})
 
 
-if _os.environ.get("RECOVERY_OBSERVATION_ONLY") == "1":
+# RECOVERY_EDITS_INDEPENDENT: editing settings does not authorize exchange writes.
+# The legacy application lock now requires a separate, explicit opt-in.
+if _os.environ.get("RECOVERY_BLOCK_APP_EDITS") == "1":
     app.add_middleware(_RecoveryObservationGate)
 
 

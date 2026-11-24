@@ -90,7 +90,7 @@ class StrategySettingsRecoveryError(PermissionError):
 
 def _recovery_shadow_only(current: Dict[str, Any], candidate: Dict[str, Any]) -> bool:
     # RECOVERY_SHADOW_SETTINGS_ONLY: check normalized changes, not submitted keys.
-    if os.environ.get("RECOVERY_OBSERVATION_ONLY") != "1":
+    if os.environ.get("RECOVERY_BLOCK_APP_EDITS") != "1":
         return False
     changed = [key for key in ("strategy", "spot_engine") if candidate[key] != current[key]]
     if changed:
