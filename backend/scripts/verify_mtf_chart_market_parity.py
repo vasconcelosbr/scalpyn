@@ -26,8 +26,8 @@ async def main(args):
     families = {f for f in ('ema','rsi','adx','atr') if (config.get(f) or {}).get('enabled')}
     rows = []
     for symbol in symbols:
-        raw = await asyncio.gather(*(market_candles(symbol, tf, cfg) for tf in TF_SECONDS))
-        for tf, candles in zip(TF_SECONDS, raw):
+        raw = await asyncio.gather(*(market_candles(symbol, tf, cfg) for tf in cfg.active_timeframes()))
+        for tf, candles in zip(cfg.active_timeframes(), raw):
             closed = closed_candles(candles, tf, int(time.time()))
             window = calculation_window(config, tf)
             if len(closed) < window:

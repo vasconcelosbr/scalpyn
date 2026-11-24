@@ -173,6 +173,9 @@ async def prepared(raw, tf, cutoff, indicators, families, cfg, history=None):
 
 async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True):
     from .market_data_service import market_data_service
+    if cfg.schema_version == 'mtf_chart_v3':
+        from .mtf_chart_v3 import chart_data_v3
+        return await chart_data_v3(db, user_id, symbol, profile_id, cfg, include_display)
     profile, indicators, identity, families, names = await profile_context(db, user_id, profile_id, include_display)
     indicators, identity = effective_indicators(indicators, identity, cfg)
     # Close snapshots first, then collect live context; observed_at is never
@@ -181,8 +184,8 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
     cutoff = now-now % TF_SECONDS["5m"]
     # MTF_DISPLAY_WARMUP: the added prefix is display-only. The evaluation
     # keeps its original candle domain and producer initialization window.
-    full_raw = dict(zip(TF_SECONDS, await asyncio.gather(*(market_candles(symbol, tf, cfg,
-        limit=min(1000, cfg.candle_limits[tf] + (calculation_window(indicators, tf) if include_display else 0))) for tf in TF_SECONDS))))
+    full_raw = dict(zip(cfg.active_timeframes(), await asyncio.gather(*(market_candles(symbol, tf, cfg,
+        limit=min(1000, cfg.candle_limits[tf] + (calculation_window(indicators, tf) if include_display else 0))) for tf in cfg.active_timeframes()))))
     raw = {tf: candles[-cfg.candle_limits[tf]:] for tf,candles in full_raw.items()}
     closes = [c["time"]+TF_SECONDS["5m"] for c in raw["5m"] if c.get("is_closed") and c["time"]+TF_SECONDS["5m"] <= cutoff]
     if closes:
@@ -191,7 +194,7 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
     display_frames = {}
     display_errors = {}
     errors = {}
-    for tf in TF_SECONDS:
+    for tf in cfg.active_timeframes():
         try:
             display_frames[tf] = await prepared(full_raw[tf], tf, cutoff, indicators, families, cfg)
         except ValueError as exc:
@@ -387,12 +390,13 @@ async def advance_shadows(db, user_id):
         ) x WHERE state->>'status' IN ('PENDING','OPEN')"""), {"uid": user_id})).mappings().all()
     for row in rows:
         cfg = MTFChartConfig.model_validate(row["config_snapshot"])
-        candles = closed_candles(await market_candles(row["symbol"], "5m", cfg), "5m", int(time.time()))
-        hourly = closed_candles(await market_candles(row["symbol"], "1h", cfg), "1h", int(time.time()))
-        hourly_closes = {c["time"]+TF_SECONDS["1h"]: c["close"] for c in hourly}
+        trigger_tf, zone_tf = cfg.stage("trigger"), cfg.stage("zone")
+        candles = closed_candles(await market_candles(row["symbol"], trigger_tf, cfg), trigger_tf, int(time.time()))
+        hourly = closed_candles(await market_candles(row["symbol"], zone_tf, cfg), zone_tf, int(time.time()))
+        hourly_closes = {c["time"]+TF_SECONDS[zone_tf]: c["close"] for c in hourly}
         state = row["state"]
         for candle in candles:
-            next_state = simulate_step(state, candle, cfg, hourly_closes.get(candle["time"]+TF_SECONDS["5m"]))
+            next_state = simulate_step(state, candle, cfg, hourly_closes.get(candle["time"]+TF_SECONDS[trigger_tf]))
             if next_state is not None:
                 await append_shadow(db, row["id"], next_state)
                 state = next_state

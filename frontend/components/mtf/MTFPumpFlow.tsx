@@ -28,17 +28,17 @@ export function MTFPumpFlow({context, watchlist, pollSeconds, timezone, stale}: 
   return <section className="mtf-card mtf-flow" aria-label="Capital e fluxo Pump">
     <div className="mtf-card-title"><strong>Capital e fluxo</strong><span>SHADOW</span></div>
     <div className="mtf-panel-body">
-      <p className="mtf-muted">Contexto do Pump. Score e vetos MTF preservados.</p>
+      <p className="mtf-muted">Contexto do Pump. Participa de score e vetos quando referenciado nas regras JSON.</p>
       {!enabled?<p className="mtf-reading">Ative em Configurar análise MTF → Capital e fluxo.</p>:<>
         {stale&&<p className="mtf-warning" role="status">Leitura anterior: aguardando atualização do gráfico.</p>}
-        <div className="mtf-flow-windows">{(['4h','1h','5m'] as Timeframe[]).map(tf=>{
+        <div className="mtf-flow-windows">{(Object.keys(context.capital) as Timeframe[]).map(tf=>{
           const r=context.capital[tf];return <div key={tf} className={`mtf-flow-window ${r?.state==='inflow'?'positive':r?.state==='outflow'?'negative':''}`}>
             <small>CAPITAL {tf.toUpperCase()}</small><strong>{flowLabels[r?.state??'unavailable']}</strong>
             <b>{r?.state==='unavailable'?'—':pct(r?.ratio)}</b><span>{r?.state==='unavailable'?'—':`${number(r?.net_usdt,2)} USDT`}</span>
             <small>Cobertura {pct(r?.coverage)}</small>{r?.reason&&<small>{reasons[r.reason]??r.reason}</small>}
           </div>;
         })}</div>
-        <div className="mtf-data-row"><span>Fluxo do ativo · 5m</span><b>{flowLabels[context.asset.state??'unavailable']}</b></div>
+        <div className="mtf-data-row"><span>Fluxo do ativo · {String(context.config?.asset_window ?? '5m')}</span><b>{flowLabels[context.asset.state??'unavailable']}</b></div>
         <div className="mtf-data-row"><span>Delta normalizado</span><b>{context.asset.state==='unavailable'?'—':number(context.asset.ratio,4)}</b></div>
         <div className="mtf-data-row"><span>Persistência compradora</span><b>{context.asset.state==='unavailable'?'—':pct(context.asset.buy_persistence)}</b></div>
         <div className="mtf-data-row"><span>Confirmação para comparação</span><b>{flowLabels[context.confirmation]}</b></div>

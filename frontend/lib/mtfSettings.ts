@@ -8,7 +8,7 @@ export function targetPoints(candles: Candle[], pct?: number) {
 }
 
 export function settingsDraft(config: MTFConfig | null, boot: Bootstrap): MTFConfig {
-  const next = structuredClone(config ?? boot.preset);
+  const next = structuredClone(config?.schema_version === "mtf_chart_v3" ? config : (config ? boot.effective_config ?? config : boot.effective_preset ?? boot.preset));
   next.presentation = {...(next.presentation ?? boot.presentation_preset),
     target_pct: next.presentation?.target_pct ?? boot.presentation_preset.target_pct};
   if (next.presentation.fear_greed == null && boot.presentation_preset.fear_greed)
@@ -42,7 +42,7 @@ export function settingsForSave(draft: MTFConfig, current: MTFConfig | null, boo
   const engine = (c: MTFConfig) => Object.fromEntries(Object.entries(c).filter(([key])=>key!=='presentation' && key!=='pump_flow'));
   // Visual-only/no-op saves must preserve the engine identity. The first rule
   // edit freezes the inherited ATR; editing ATR itself always creates an override.
-  if (next.atr_period == null && (!current || canonical(engine(next)) !== canonical(engine(baseline))))
+  if (next.schema_version !== "mtf_chart_v3" && next.atr_period == null && (!current || canonical(engine(next)) !== canonical(engine(baseline))))
     next.atr_period = boot.inherited_atr?.enabled ? boot.inherited_atr.period ?? '' : '';
   return next;
 }
@@ -69,8 +69,18 @@ export function validateSettings(config: MTFConfig, root: ConfigSchema): Record<
     const s = resolveSchema(raw, root);
     if (s.anyOf) {
       if (value == null && s.anyOf.some(x => x.type === 'null')) return;
-      return visit(value, s.anyOf.find(x => x.type !== 'null') ?? {}, path);
+      const baseline = {...errors};
+      let best: Record<string,string> | null = null;
+      for (const option of s.anyOf) {
+        Object.keys(errors).forEach(key=>delete errors[key]); Object.assign(errors,baseline);
+        visit(value,option,path);
+        if (Object.keys(errors).length===Object.keys(baseline).length) return;
+        if (!best || Object.keys(errors).length<Object.keys(best).length) best={...errors};
+      }
+      Object.keys(errors).forEach(key=>delete errors[key]); Object.assign(errors,best ?? baseline);
+      return;
     }
+    if (s.type === 'null') { if (value !== null) errors[path] = 'Valor deve ser nulo.'; return; }
     if (s.type === 'number' || s.type === 'integer') {
       if (typeof value !== 'number' || !Number.isFinite(value)) errors[path] = 'Informe um número válido.';
       else if (s.type === 'integer' && !Number.isInteger(value)) errors[path] = 'Informe um número inteiro.';
@@ -99,14 +109,14 @@ export function validateSettings(config: MTFConfig, root: ConfigSchema): Record<
   visit(config, root, '');
   if (Object.keys(errors).length) return errors;
   const weights = config.score_weights as Record<string, number>;
-  if (weights && Number(config.min_score) > Object.values(weights).reduce((s, v) => s + v, 0)) errors.min_score = 'O score mínimo excede a soma dos pesos.';
+  if (weights && Number(config.min_score) > Object.values(weights).reduce((s, v) => s + v, 0) + (config.rules?.scoring?.reduce((s,r)=>s+r.points,0) ?? 0)) errors.min_score = 'O score mínimo excede a soma dos pesos.';
   if (Number(config.rr_bonus_threshold) < Number(config.min_rr_net)) errors.rr_bonus_threshold = 'O bônus deve ser igual ou maior que o retorno/risco mínimo.';
   if (config.atr_period != null && Number(config.atr_period) >= Math.min(...Object.values(config.candle_limits))) errors.atr_period = 'O período deve ser menor que o histórico de cada timeframe.';
   if (!(config.trigger_patterns as unknown[])?.length) errors.trigger_patterns = 'Selecione pelo menos um padrão.';
   if (config.presentation && config.presentation.retry_initial_seconds > config.presentation.retry_max_seconds) errors['presentation.retry_max_seconds'] = 'Deve ser igual ou maior que o intervalo inicial.';
   if (config.presentation?.fear_greed && config.presentation.fear_greed.max_age_seconds < config.presentation.fear_greed.refresh_seconds)
     errors['presentation.fear_greed.max_age_seconds'] = 'Deve ser igual ou maior que o intervalo de consulta.';
-  if (config.schema_version === 'mtf_chart_v2') for (const tf of ['4h', '1h', '5m']) {
+  if (config.schema_version === 'mtf_chart_v2' || config.zone_algorithm === 'mtf_chart_v2') for (const tf of Object.keys(config.candle_limits)) {
     const n = (config.zone_lookback_candles as Record<string, number> | null)?.[tf];
     if (n == null || n < 1 || n > config.candle_limits[tf as keyof typeof config.candle_limits]) errors[`zone_lookback_candles.${tf}`] = 'Informe uma janela dentro do histórico disponível.';
   }

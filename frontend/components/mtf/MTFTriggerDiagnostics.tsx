@@ -27,7 +27,7 @@ function Check({row}: {row: TriggerCheck}) {
     <div className="mtf-check-heading"><strong>{row.label}{row.timeframe && <small> · {row.timeframe.toUpperCase()}</small>}</strong><State state={row.state}/></div>
     <dl className="mtf-check-values">
       <div><dt>Observado</dt><dd>{diagnosticValue(row.actual, row.unit)}</dd></div>
-      <div><dt>Exigido</dt><dd>{row.operator} {diagnosticValue(row.expected, row.unit)}</dd></div>
+      <div><dt>Exigido</dt><dd>{row.operator} {Array.isArray(row.expected) ? row.expected.join(' … ') : diagnosticValue(row.expected, row.unit)}</dd></div>
     </dl>
     {unmet && row.gap != null && <p className="mtf-check-gap">{row.gap > 0
       ? `${['>', '>='].includes(row.operator) ? 'Abaixo do mínimo' : 'Acima do máximo'}: ${diagnosticValue(row.gap, row.unit)}.`
@@ -43,7 +43,7 @@ export function MTFTriggerDiagnostics({analysis, symbol, date, pending}: {
 }) {
   const diagnostic = analysis?.trigger_diagnostics;
   const coherent = diagnostic?.status === analysis?.status && diagnostic?.config_hash === analysis?.config_hash;
-  const required = diagnostic?.checks.filter(c => c.role !== 'score') ?? [];
+  const required = diagnostic?.checks.filter(c => c.role !== 'score' && c.role !== 'context') ?? [];
   const unresolved = required.filter(c => ['FAIL', 'UNAVAILABLE'].includes(c.state));
   const waiting = required.filter(c => c.state === 'WAITING');
   const complete = required.filter(c => ['PASS', 'DISABLED'].includes(c.state));
@@ -57,7 +57,7 @@ export function MTFTriggerDiagnostics({analysis, symbol, date, pending}: {
         <p className="mtf-diagnostic-summary">{analysis.status === 'TRIGGERED' ? 'Condições do gatilho atendidas nesta avaliação.' : 'Condições a resolver na avaliação confirmada:'}</p>
         {unresolved.map(row => <Check key={row.id} row={row}/>)}
         <details className="mtf-diagnostic-group" open={!analysis.trigger_5m}>
-          <summary>Padrões de compra · basta um</summary>
+          <summary>{analysis.rules_diagnostics ? 'Padrões de candles · contexto das regras' : 'Padrões de compra · basta um'}</summary>
           <p className="mtf-muted">Alternativas habilitadas. As características de cada padrão precisam ser atendidas em conjunto no candle fechado.</p>
           {diagnostic.patterns.length ? diagnostic.patterns.map(p => <details className="mtf-pattern-check" key={p.pattern}>
             <summary><span>{patternLabels[p.pattern] ?? p.pattern}</span><State state={p.state}/></summary>
@@ -67,6 +67,7 @@ export function MTFTriggerDiagnostics({analysis, symbol, date, pending}: {
         </details>
         {waiting.length > 0 && <details className="mtf-diagnostic-group"><summary>Aguardando condições anteriores</summary>{waiting.map(row => <Check key={row.id} row={row}/>)}</details>}
         <details className="mtf-diagnostic-group"><summary>Condições atendidas e filtros desativados</summary>{complete.map(row => <Check key={row.id} row={row}/>)}</details>
+        {analysis.rules_diagnostics && <details className="mtf-diagnostic-group"><summary>Condições JSON · resultados individuais</summary><p className="mtf-muted">O resultado obrigatório é o do grupo E/OU acima. Uma alternativa falsa pode ser compensada por outra verdadeira em um grupo OU.</p>{diagnostic.checks.filter(c=>c.role==='context').map(row=><Check key={row.id} row={row}/>)}</details>}
         <details className="mtf-diagnostic-group"><summary>Componentes do score</summary><p className="mtf-muted">Estes itens somam pontos. O requisito obrigatório é atingir o score mínimo; cada item isolado não é um veto.</p>{score.map(row => <Check key={row.id} row={row}/>)}</details>
       </>}
     </div>

@@ -9,7 +9,8 @@ import pandas as pd
 from ..schemas.mtf_chart import MTFChartConfig
 from .feature_engine import FeatureEngine
 
-TF_SECONDS = {"4h": 14400, "1h": 3600, "5m": 300}
+from ..schemas.mtf_rules import DURATIONS
+TF_SECONDS = DURATIONS
 ENGINE_VERSION = "mtf_chart_v1"
 
 
@@ -87,14 +88,14 @@ def zones(points: list[dict], atr: float, cfg: MTFChartConfig, reference: float 
             else:
                 clusters[-1].append(point)
         for group in clusters:
-            if cfg.schema_version == 'mtf_chart_v2' or len(group) >= cfg.zone_min_touches:
+            if (cfg.schema_version == 'mtf_chart_v2' or cfg.zone_algorithm == 'mtf_chart_v2') or len(group) >= cfg.zone_min_touches:
                 center = sum(p["price"] for p in group) / len(group)
                 result.append({"type": zone_type, "low": center-cfg.zone_atr_mult*atr/2,
                                "high": center+cfg.zone_atr_mult*atr/2, "touches": len(group),
                                "available_at": max(p["confirmed_at"] for p in group),
                                **({"origins": [zone_type], "pivot_times": sorted({p['time'] for p in group})}
-                                  if cfg.schema_version == 'mtf_chart_v2' else {})})
-    if cfg.schema_version == 'mtf_chart_v2' and reference is not None:
+                                  if (cfg.schema_version == 'mtf_chart_v2' or cfg.zone_algorithm == 'mtf_chart_v2') else {})})
+    if (cfg.schema_version == 'mtf_chart_v2' or cfg.zone_algorithm == 'mtf_chart_v2') and reference is not None:
         merged = []
         for zone in sorted(result, key=lambda z: z['low']):
             if merged and zone['low'] - merged[-1]['high'] <= cfg.zone_atr_mult * atr:
@@ -116,18 +117,20 @@ def zones(points: list[dict], atr: float, cfg: MTFChartConfig, reference: float 
 
 def frame_zones(frame, tf, cfg, reference):
     points = frame['pivots']
-    if cfg.schema_version == 'mtf_chart_v2':
+    if (cfg.schema_version == 'mtf_chart_v2' or cfg.zone_algorithm == 'mtf_chart_v2'):
         candles = frame['candles'][-cfg.zone_lookback_candles[tf]:]
         points = [p for p in points if candles and p['time'] >= candles[0]['time']
                   and p['confirmed_at'] <= candles[-1]['time'] + TF_SECONDS[tf]]
     return zones(points, frame['atr'], cfg, reference) if frame.get('atr') else []
 
 
-def indicator_history(candles: list[dict], config: dict, families: set[str], window: int | None = None) -> dict[str, list[dict]]:
+def indicator_history(candles: list[dict], config: dict, families: set[str], window: int | None = None, *, epoch_seconds: bool = False) -> dict[str, list[dict]]:
     """Exact prefix evaluation of existing functions; no parallel TA formulas."""
     engine = FeatureEngine(config)
     df = pd.DataFrame(candles)
     series: dict[str, list[dict]] = {}
+    if epoch_seconds and not df.empty:
+        df.index = pd.to_datetime(df["time"], unit="s", utc=True)
     if df.empty:
         return series
     for family in sorted(families | {"atr"}):
@@ -184,7 +187,8 @@ def prepare_frame(candles, tf, as_of, indicator_config, families, cfg, window=No
             "atr": atr_map.get(closed[-1]["time"]) if closed else None}
 
 
-def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_pct: float | None, btc_trend: str | None) -> dict[str, Any]:
+def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_pct: float | None, btc_trend: str | None, *, rule_series=None, flow=None) -> dict[str, Any]:
+    structure_tf, zone_tf, trigger_tf = (cfg.stage(k) for k in ('structure','zone','trigger'))
     result: dict[str, Any] = {"symbol": symbol, "market": "spot", "mode": "SHADOW", "operational_effect": False,
         "engine_version": cfg.schema_version, "evaluated_at_utc": iso(as_of), "candle_closed_5m": None,
         "context_4h": {"trend": "RANGE", "last_pivots": [], "strength": "NEUTRAL", "last_candle_pattern": None},
@@ -193,11 +197,11 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         "vetoes": [], "status": "NO_TRADE", "explanation": []}
     from .mtf_trigger_diagnostics import build_diagnostics
     vetoes = result["vetoes"]
-    closed_5m = frames.get("5m", {}).get("candles", [])
+    closed_5m = frames.get(trigger_tf, {}).get("candles", [])
     if closed_5m:
         result["candle_closed_5m"] = iso(closed_5m[-1]["time"])
-        result["candle_close_at_utc"] = iso(closed_5m[-1]["time"] + TF_SECONDS["5m"])
-    for tf in TF_SECONDS:
+        result["candle_close_at_utc"] = iso(closed_5m[-1]["time"] + TF_SECONDS[trigger_tf])
+    for tf in dict.fromkeys((structure_tf, zone_tf, trigger_tf)):
         frame = frames.get(tf, {})
         candles = frame.get("candles", [])
         if not candles or not frame.get("atr"):
@@ -208,16 +212,16 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         result["explanation"] = ["SEM TRADE: candles fechados ou ATR indisponíveis/desatualizados."]
         result["trigger_diagnostics"] = build_diagnostics(result, frames, cfg, as_of, spread_pct, btc_trend)
         return result
-    f4, f1, f5 = (frames[tf] for tf in ("4h", "1h", "5m"))
+    f4, f1, f5 = (frames[tf] for tf in (structure_tf, zone_tf, trigger_tf))
     c = f5["candles"][-1]
     result["candle_closed_5m"] = iso(c["time"])
-    result["candle_close_at_utc"] = iso(c["time"] + TF_SECONDS["5m"])
+    result["candle_close_at_utc"] = iso(c["time"] + TF_SECONDS[trigger_tf])
     direction = trend(f4["pivots"])
     last4 = [p["pattern"] for p in f4["patterns"] if p["time"] == f4["candles"][-1]["time"]]
     force = any(p in cfg.force_patterns for p in last4)
     result["context_4h"] = {"trend": direction, "last_pivots": [p["label"] for p in f4["pivots"][-4:]],
                             "last_candle_pattern": last4[0] if last4 else None, "strength": "FORCE" if force else "NEUTRAL"}
-    zs = frame_zones(f1, '1h', cfg, c['close'])
+    zs = frame_zones(f1, zone_tf, cfg, c['close'])
     result["zones"] = zs
     supports = [z for z in zs if z["low"] <= c["close"]]
     supports = [z for z in supports if z["type"] == "SUPPORT" or
@@ -250,9 +254,45 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         vetoes.append("BTC_CONTEXT_UNAVAILABLE")
     if cfg.veto_filters.btc_downtrend and symbol != "BTC_USDT" and btc_trend == "DOWN":
         vetoes.append("BTC_DOWNTREND")
+    rule_checks, group_checks, extra_components = [], [], {}
+    armed, confirmed = near, bool(trigger)
+    if cfg.rules is not None:
+        from .mtf_rules_engine import evaluate_group
+        values = {'structure':{'trend':direction,'force':force},
+                  'zone':{'near':near,'rejection':rejection,'distance_atr':distance if zone else None},
+                  'trigger':{'present':bool(trigger),'pattern':trigger['pattern'] if trigger else ''},
+                  'volume':{'ratio':ratio},'btc':{'trend':btc_trend},
+                  'market':{'spread_pct':spread_pct},'flow':flow or {}}
+        # Validate each referenced source independently, never use partial aggregates.
+        values['flow'] = dict(flow or {})
+        if values['flow'].get('confirmation') in ('unavailable','disabled'):
+            values['flow']['confirmation'] = None
+        values['flow']['asset'] = dict((flow or {}).get('asset') or {})
+        if values['flow']['asset'].get('state') == 'unavailable': values['flow']['asset'] = {}
+        values['flow']['capital'] = {tf: reading if reading.get('state') != 'unavailable' else {}
+            for tf, reading in (flow or {}).get('capital', {}).items()}
+        def run(root, role, key, points=None):
+            state, checks = evaluate_group(root, values, rule_series or {}, as_of, role=role)
+            rule_checks.extend(checks)
+            from .mtf_trigger_diagnostics import check
+            row = check('rules:'+key, key, None if state=='UNAVAILABLE' else state=='PASS', '=', role!='veto', role=role, enabled=state!='DISABLED')
+            if points is not None: row.update(points=points if state=='PASS' else 0, maximum_points=points)
+            group_checks.append(row)
+            if state == 'UNAVAILABLE': vetoes.append('RULE_DATA_UNAVAILABLE:'+checks[0]['id'])
+            return state == 'PASS'
+        armed = run(cfg.rules.armed, 'required', 'ARMADO')
+        confirmed = run(cfg.rules.trigger, 'required', 'GATILHO')
+        for index, root in enumerate(cfg.rules.vetoes):
+            before = len(rule_checks)
+            if run(root, 'veto', 'VETO '+str(index+1)): vetoes.append('RULE_VETO:'+rule_checks[before]['id'])
+        for rule in cfg.rules.scoring:
+            extra_components['rule:'+rule.id] = rule.points if run(rule.when, 'score', rule.id, rule.points) else 0
+        result['rules_diagnostics'] = rule_checks
+        result['stage_timeframes'] = cfg.timeframes.model_dump()
+        result['stage_results'] = {'armed':armed,'trigger':confirmed}
     rr = None
     plan_inputs = None
-    if trigger and near:
+    if confirmed and armed:
         entry = c["close"]
         stop = c["low"] - max(cfg.stop_buffer_atr * f5["atr"], entry*(spread_pct or 0)/100)
         targets = sorted({z["low"] for z in zs if z["type"] == "RESISTANCE" and z["low"] > entry})
@@ -282,33 +322,45 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
                 "rr_gross": (targets[0]-entry)/(entry-stop) if entry > stop else None,
                 "quantity": qty, "notional_usdt": qty*entry if qty else None,
                 "expires_after_candles": cfg.expires_after_candles,
-                "expires_at": iso(as_of+cfg.expires_after_candles*TF_SECONDS["5m"])}
+                "expires_at": iso(as_of+cfg.expires_after_candles*TF_SECONDS[trigger_tf])}
     flags = {"trend": direction == "UP", "force": force and direction == "UP", "zone": near,
              "rejection": rejection and near, "trigger": bool(trigger), "volume": ratio is not None and ratio >= cfg.vol_mult,
              "rr": rr is not None and rr >= cfg.rr_bonus_threshold}
     components = {k: cfg.score_weights[k] if v else 0 for k, v in flags.items()}
+    components.update(extra_components)
+    result["score"]["maximum"] += sum(r.points for r in cfg.rules.scoring) if cfg.rules else 0
     score = 0 if vetoes else sum(components.values())
     result["score"].update(total=score, raw=sum(components.values()), components=components)
-    result["status"] = "NO_TRADE" if vetoes else "TRIGGERED" if near and trigger and result["plan"] and score >= cfg.min_score else "ARMED" if near else "WAIT"
+    result["status"] = "NO_TRADE" if vetoes else "TRIGGERED" if armed and confirmed and result["plan"] and score >= cfg.min_score else "ARMED" if armed else "WAIT"
     result["explanation"] = [
-        f"Estrutura do 4H: {dict(UP='alta', DOWN='baixa', RANGE='lateral')[direction]}; pivôs confirmados: {', '.join(result['context_4h']['last_pivots']) or 'indisponíveis'}.",
-        "Preço próximo do suporte do 1H." if near else "Aguardando aproximação de uma zona confirmada do 1H.",
+        f"Estrutura do {structure_tf.upper()}: {dict(UP='alta', DOWN='baixa', RANGE='lateral')[direction]}; pivôs confirmados: {', '.join(result['context_4h']['last_pivots']) or 'indisponíveis'}.",
+        f"Preço próximo do suporte do {zone_tf.upper()}." if near else f"Aguardando aproximação de uma zona confirmada do {zone_tf.upper()}.",
         f"Gatilho fechado: {trigger['pattern']} em {iso(c['time'])}." if trigger else "Sem gatilho de compra no último candle fechado.",
         "Plano experimental; stops e perdas pertencem somente à simulação.",
     ]
     result["trigger_diagnostics"] = build_diagnostics(result, frames, cfg, as_of, spread_pct, btc_trend,
         ratio=ratio, flags=flags, plan_inputs=plan_inputs)
+    if cfg.rules is not None:
+        result.update(context=result['context_4h'], zone=result['zone_1h'], trigger=result['trigger_5m'],
+                      candle_closed= result['candle_closed_5m'])
+        # Native proximity/pattern checks describe context, not mandatory custom rules.
+        diagnostic = result['trigger_diagnostics']
+        diagnostic['checks'] = [c for c in diagnostic['checks'] if c['id'] not in ('zone','trigger')]
+        diagnostic['checks'].extend(group_checks)
+        diagnostic['checks'].extend({**row, 'role':'context'} for row in rule_checks)
+        result['explanation'].insert(0, 'Regras JSON: ARMADO '+str(armed)+'; GATILHO '+str(confirmed)+'.')
     return result
 
 
 def simulate_step(state: dict, candle: dict, cfg: MTFChartConfig, hourly_close: float | None = None) -> dict | None:
     """Append-only event reducer. Never fills inside/before the decision candle."""
+    trigger_tf = cfg.stage('trigger')
     s = dict(state)
     if s["status"] in ("TP", "SL", "EXPIRED", "UNRESOLVED") or candle["time"] <= s.get("last_candle", -1):
         return None
     if candle["time"] <= s["observed_at"]:
         return None
-    expected = s["last_candle"]+TF_SECONDS["5m"] if s["status"] == "OPEN" else (s["observed_at"]//TF_SECONDS["5m"]+1)*TF_SECONDS["5m"]
+    expected = s["last_candle"]+TF_SECONDS[trigger_tf] if s["status"] == "OPEN" else (s["observed_at"]//TF_SECONDS[trigger_tf]+1)*TF_SECONDS[trigger_tf]
     if candle["time"] > expected and (s["status"] == "OPEN" or candle["time"] < s["expires_at"]):
         return {**s, "last_candle": candle["time"], "status": "UNRESOLVED", "reason": "CANDLE_GAP", "pnl_usdt": None, "pnl_pct": None}
     fee, slip = cfg.fee_per_side_pct/100, cfg.slippage_pct/100
@@ -345,7 +397,7 @@ def simulate_step(state: dict, candle: dict, cfg: MTFChartConfig, hourly_close: 
         if candle["high"] >= s["tp2"]:
             s["proceeds"] += s["remaining"]*s["tp2"]*(1-slip)*(1-fee)
             s.update(status="TP", remaining=0)
-    if s["status"] == "OPEN" and candle["time"]+TF_SECONDS["5m"] >= s["filled_at"]+cfg.holding_candles*TF_SECONDS["5m"]:
+    if s["status"] == "OPEN" and candle["time"]+TF_SECONDS[trigger_tf] >= s["filled_at"]+cfg.holding_candles*TF_SECONDS[trigger_tf]:
         s["proceeds"] += s["remaining"]*candle["close"]*(1-slip)*(1-fee)
         s.update(status="EXPIRED", remaining=0, reason="HOLDING_EXPIRED")
     if s["status"] == "OPEN" and hourly_close is not None and s.get("invalidation_zone_low") is not None and hourly_close < s["invalidation_zone_low"]:

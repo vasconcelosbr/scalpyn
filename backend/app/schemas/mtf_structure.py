@@ -1,5 +1,6 @@
 """Additive read-only presentation contract; not a strategy configuration."""
 from typing import Literal
+from .mtf_rules import Timeframe
 from pydantic import BaseModel, FiniteFloat
 
 
@@ -28,13 +29,15 @@ class StructureFrame(BaseModel):
 
 class StructureConflict(BaseModel):
     kind: Literal['structure', 'flow']
-    timeframe: Literal['1h', '5m']
+    timeframe: Timeframe
     state: str
     sequence: list[str] = []
     ratio: FiniteFloat | None = None
 
 
 class StructureContext(BaseModel):
+    stage_timeframes: dict[str, Timeframe] | None = None
+    ema_period: int = 50
     source: Literal['chart', 'observation']
     as_of: str
     evaluated_at: str

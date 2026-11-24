@@ -30,7 +30,7 @@ def pattern_conditions(c, previous, atr, cfg):
     upper = c['high']-max(c['open'], c['close'])
     lower = min(c['open'], c['close'])-c['low']
     def p(key, label, value, op, target, note=None):
-        return check(key, label, value, op, target, unit='price', timeframe='5m', note=note)
+        return check(key, label, value, op, target, unit='price', timeframe=cfg.stage('trigger'), note=note)
     common = [p('atr', 'ATR disponível', atr, '>', 0),
               p('range', 'Amplitude positiva', amplitude, '>', 0),
               p('min_range', 'Amplitude mínima do candle', amplitude, '>=', cfg.min_range_atr*atr if atr else None,
@@ -75,7 +75,9 @@ def build_diagnostics(result, frames, cfg, as_of, spread, btc_trend, *, ratio=No
                       flags=None, plan_inputs=None):
     """Expose the exact evaluation's operands; never fetch or invent observations."""
     checks = []
-    for tf, duration in [('4h', 14400), ('1h', 3600), ('5m', 300)]:
+    from ..schemas.mtf_rules import DURATIONS
+    for tf in dict.fromkeys(cfg.stage(k) for k in ('structure','zone','trigger')):
+        duration = DURATIONS[tf]
         frame = frames.get(tf) or {}
         candles = frame.get('candles') or []
         atr = frame.get('atr')
@@ -86,13 +88,13 @@ def build_diagnostics(result, frames, cfg, as_of, spread, btc_trend, *, ratio=No
     waiting_data = None if evaluated else 'Aguardando dados válidos para avaliar a estratégia.'
     zone = result.get('zone_1h')
     checks.append(check('zone', 'Proximidade do suporte', zone.get('distance_atr') if zone else None, '<=',
-                        cfg.zone_proximity_atr, unit='ATR', timeframe='1h', waiting=waiting_data,
+                        cfg.zone_proximity_atr, unit='ATR', timeframe=cfg.stage('zone'), waiting=waiting_data,
                         note=None if zone else 'Nenhuma zona de suporte confirmada disponível.'))
     trigger = result.get('trigger_5m')
     checks.append(check('trigger', 'Padrão de compra no candle fechado', bool(trigger) if evaluated else None, '=', True,
-                        timeframe='5m', waiting=waiting_data, note='Basta atender um dos padrões habilitados abaixo.'))
+                        timeframe=cfg.stage('trigger'), waiting=waiting_data, note='Basta atender um dos padrões habilitados abaixo.'))
     pattern_details = []
-    f5 = frames.get('5m') or {}
+    f5 = frames.get(cfg.stage('trigger')) or {}
     candles = f5.get('candles') or []
     if candles and f5.get('atr'):
         rules = pattern_conditions(candles[-1], candles[-2] if len(candles)>1 else None, f5['atr'], cfg)
@@ -103,8 +105,8 @@ def build_diagnostics(result, frames, cfg, as_of, spread, btc_trend, *, ratio=No
                                         conditions=conditions))
     direction = result['context_4h']['trend'] if evaluated else None
     for key, label, actual, forbidden, enabled, tf in [
-        ('asset_downtrend', 'Tendência do ativo: veto de baixa', direction, 'DOWN', cfg.veto_filters.asset_downtrend, '4h'),
-        ('asset_range', 'Tendência do ativo: veto de lateralidade', direction, 'RANGE', cfg.veto_filters.asset_range, '4h'),
+        ('asset_downtrend', 'Tendência do ativo: veto de baixa', direction, 'DOWN', cfg.veto_filters.asset_downtrend, cfg.stage('structure')),
+        ('asset_range', 'Tendência do ativo: veto de lateralidade', direction, 'RANGE', cfg.veto_filters.asset_range, cfg.stage('structure')),
         ('btc_downtrend', 'Tendência do Bitcoin', btc_trend, 'DOWN', cfg.veto_filters.btc_downtrend and result['symbol']!='BTC_USDT', cfg.btc_trend_timeframe),
     ]:
         checks.append(check(key, label, actual, '!=', forbidden, role='veto', timeframe=tf, enabled=enabled, waiting=waiting_data))
@@ -113,6 +115,9 @@ def build_diagnostics(result, frames, cfg, as_of, spread, btc_trend, *, ratio=No
                         enabled=cfg.veto_filters.spread, waiting=waiting_data))
     pending_plan = waiting_data or ('Aguardando padrão de gatilho.' if not trigger else
                                    'Aguardando aproximação do suporte.' if not zone or not zone.get('in_zone') else None)
+    if cfg.rules is not None:
+        stages = result.get('stage_results', {})
+        pending_plan = waiting_data or (None if stages.get('armed') and stages.get('trigger') else 'Aguardando regras JSON de ARMADO e GATILHO.')
     inputs = plan_inputs or {}
     checks.append(check('stop_valid', 'Stop positivo', inputs.get('stop'), '>', 0, unit='price', waiting=pending_plan))
     checks.append(check('stop_distance', 'Distância máxima do stop', inputs.get('stop_distance'), '<=',
@@ -141,7 +146,7 @@ def build_diagnostics(result, frames, cfg, as_of, spread, btc_trend, *, ratio=No
         row.update(points=result['score']['components']['rr'], maximum_points=cfg.score_weights['rr'])
         checks.append(row)
         row = check('score:volume', 'Volume relativo', ratio, '>=', cfg.vol_mult, unit='ratio', role='score',
-                    timeframe='5m', note=f'Volume do candle / média dos {cfg.vol_lookback} candles anteriores. Contribui para o score; não constitui veto independente.')
+                    timeframe=cfg.stage('trigger'), note=f'Volume do candle / média dos {cfg.vol_lookback} candles anteriores. Contribui para o score; não constitui veto independente.')
         row.update(points=result['score']['components']['volume'], maximum_points=cfg.score_weights['volume'])
         checks.append(row)
     return dict(version='mtf_trigger_diagnostics_v1', status=result['status'],
@@ -150,12 +155,13 @@ def build_diagnostics(result, frames, cfg, as_of, spread, btc_trend, *, ratio=No
 
 def finalize_diagnostics(analysis, cfg, now, cutoff):
     """Service freshness checks run after the pure engine; reflect their final result."""
+    from ..schemas.mtf_rules import DURATIONS
     diagnostic = analysis['trigger_diagnostics']
     diagnostic['status'] = analysis['status']
     diagnostic['observed_at_utc'] = analysis['observed_at_utc']
     diagnostic['config_hash'] = analysis['config_hash']
     diagnostic['checks'].append(check('evaluation_current', 'Atualidade da avaliação',
-        now-cutoff, '<=', cfg.stale_tf_multiplier*300, unit='seconds'))
+        now-cutoff, '<=', cfg.stale_tf_multiplier*DURATIONS[cfg.stage("trigger")], unit='seconds'))
     for row in diagnostic['checks']:
         if row['id'] == 'score' and row['state'] not in ('WAITING', 'UNAVAILABLE'):
             row.update(check('score', row['label'], analysis['score']['total'], '>=', cfg.min_score,

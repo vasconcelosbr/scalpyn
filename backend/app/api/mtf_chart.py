@@ -41,8 +41,15 @@ async def bootstrap(response: Response, db: AsyncSession = Depends(get_db), uid:
         except ValidationError:
             pass  # Keep incomplete configurations editable, never invent missing rules.
     indicators = await config_service.get_config(db, 'indicators', uid)
+    from ..services.mtf_config_contract import complete_config, catalog
+    effective_config, effective_preset, conversion_error = None, None, None
+    try:
+        effective_config = complete_config(config or experimental_preset(), indicators)
+        effective_preset = complete_config(experimental_preset(), indicators)
+    except (ValueError, ValidationError) as exc:
+        conversion_error = str(exc)
     profiles = (await db.execute(select(Profile).where(Profile.user_id == uid, Profile.is_active.is_(True)))).scalars().all()
-    return {"config": config or None, "preset": experimental_preset(), "watchlists": await service.watchlist_options(db, uid),
+    return {"config": config or None, "effective_config": effective_config, "effective_preset": effective_preset, "conversion_error": conversion_error, "catalog": catalog(), "preset": experimental_preset(), "watchlists": await service.watchlist_options(db, uid),
             "profiles": [{"id": str(p.id), "name": p.name, "default_timeframe": (p.config or {}).get("default_timeframe")} for p in profiles],
             "preferences": await config_service.get_config(db, "mtf_preferences", uid), 'presentation_preset': presentation_preset(),
             'pump_flow_preset': pump_flow_preset(), 'inherited_atr': indicators.get('atr'), 'config_schema': MTFChartConfig.model_json_schema(),
@@ -59,6 +66,16 @@ async def fear_greed(response: Response, db: AsyncSession = Depends(get_db), uid
     await db.rollback()
     response.headers['Cache-Control'] = 'private, no-store'
     return await get_snapshot(uid, key, settings)
+
+
+@router.post("/config/validate")
+async def validate_config(payload: MTFChartConfig, db: AsyncSession = Depends(get_db), uid: UUID = Depends(get_current_user_id)):
+    allowed = {w['id'] for w in await service.watchlist_options(db, uid)}
+    if payload.default_watchlist not in allowed or not set(payload.monitored_watchlists) <= allowed:
+        raise HTTPException(422, 'WATCHLIST_NOT_OWNED_OR_NOT_SPOT')
+    from ..services.profile_runtime_config import canonical_hash
+    return {'valid': True, 'config': payload.model_dump(), 'config_hash': canonical_hash(payload.engine_dump()),
+            'mode': 'SHADOW', 'operational_effect': False}
 
 
 @router.put("/config")
@@ -108,7 +125,7 @@ async def watchlist(response: Response, watchlist_id: str, db: AsyncSession = De
     now = datetime.now(timezone.utc).timestamp()
     for analysis in latest.values():
         closed_at = analysis.get('candle_close_at_utc')
-        stale = not closed_at or now-datetime.fromisoformat(closed_at).timestamp() > cfg.stale_tf_multiplier*300
+        stale = not closed_at or now-datetime.fromisoformat(closed_at).timestamp() > cfg.stale_tf_multiplier*service.TF_SECONDS[cfg.stage("trigger")]
         if stale or analysis.get('config_hash') != expected_hash:
             analysis['status'] = 'NO_TRADE'
             analysis['score']['total'] = 0
@@ -176,6 +193,7 @@ async def report(watchlist_id: str, db: AsyncSession = Depends(get_db), uid: UUI
         JOIN LATERAL (SELECT state FROM mtf_chart_shadow_events WHERE evaluation_id=e.id ORDER BY id DESC LIMIT 1) s ON true
         WHERE e.user_id=:uid AND e.watchlist_id=:wid
     ) SELECT payload->'trigger_5m'->>'pattern' AS pattern, payload->>'config_hash' AS config_hash,
+        coalesce(config_snapshot->'timeframes'->>'trigger','5m') AS timeframe,
         count(*) AS n, avg((state->>'pnl_pct')::double precision) AS mean_pct,
         stddev_samp((state->>'pnl_pct')::double precision) AS stddev_pct,
         count(*) FILTER (WHERE (state->>'pnl_usdt')::double precision > 0) AS profitable,
@@ -183,7 +201,7 @@ async def report(watchlist_id: str, db: AsyncSession = Depends(get_db), uid: UUI
         min((config_snapshot->>'fee_per_side_pct')::double precision) AS fee_per_side_pct,
         min((config_snapshot->>'slippage_pct')::double precision) AS slippage_pct
         FROM final WHERE state->>'status' IN ('TP','SL','EXPIRED') AND state->>'pnl_pct' IS NOT NULL
-        GROUP BY payload->'trigger_5m'->>'pattern', payload->>'config_hash'
+        GROUP BY payload->'trigger_5m'->>'pattern', payload->>'config_hash', coalesce(config_snapshot->'timeframes'->>'trigger','5m')
         ORDER BY pattern,config_hash"""), {"uid": uid, "wid": watchlist_id})).mappings().all()
     groups = []
     for row in rows:
@@ -191,7 +209,7 @@ async def report(watchlist_id: str, db: AsyncSession = Depends(get_db), uid: UUI
         n = item['n']
         enough = n >= cfg.min_report_sample and item['stddev_pct'] is not None
         half = NormalDist().inv_cdf((1+cfg.confidence_level)/2)*item['stddev_pct']/sqrt(n) if enough else None
-        groups.append({**item, 'timeframe': '5m', 'sample_sufficient': enough,
+        groups.append({**item, 'sample_sufficient': enough,
             'confidence_interval': [item['mean_pct']-half, item['mean_pct']+half] if half is not None else None,
             'positive_fraction': item['profitable']/n if n else None})
     return {'groups': groups, 'confidence_level': cfg.confidence_level, 'calibrated': False,

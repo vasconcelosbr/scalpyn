@@ -51,7 +51,7 @@ def snapshot(data, member, cfg, history_cfg, scheduled_at):
     observed = utc(data.get('captured_at') or analysis['observed_at_utc'])
     indicators, frames = [], {}
     reasons = list(analysis.get('data_errors', {}).values())
-    reasons += [v for v in analysis.get('vetoes', []) if v.startswith(('DATA_', 'BTC_CONTEXT_UNAVAILABLE'))]
+    reasons += [v for v in analysis.get('vetoes', []) if v.startswith(('DATA_', 'BTC_CONTEXT_UNAVAILABLE', 'RULE_DATA_UNAVAILABLE'))]
     for tf, frame in data['frames'].items():
         candles = frame.get('candles', [])
         frames[tf] = {k: v for k,v in frame.items() if k not in ('candles','indicators')}
@@ -73,7 +73,7 @@ def snapshot(data, member, cfg, history_cfg, scheduled_at):
         reasons.append('PROFILE_INDICATORS_UNAVAILABLE')
     if not data.get('quote'):
         reasons.append('QUOTE_UNAVAILABLE')
-    last = frames.get('5m', {}).get('last_closed_candle')
+    last = frames.get(cfg.stage('trigger'), {}).get('last_closed_candle')
     quote = data.get('quote') or {}
     price_time = utc(quote.get('received_at'))
     price = quote.get('price')
@@ -91,7 +91,7 @@ def snapshot(data, member, cfg, history_cfg, scheduled_at):
         price_received_at=price_time.isoformat() if price_time else None,
         price_source='gate.io/ticker', price_timestamp_kind='local_response_receipt; exchange_event_timestamp_unavailable',
         price_age_seconds=(observed-price_time).total_seconds() if price_time else None,
-        price_quality='unknown' if price_time is None else 'stale' if (observed-price_time).total_seconds() > cfg.stale_tf_multiplier*300 else 'current',
+        price_quality='unknown' if price_time is None else 'stale' if (observed-price_time).total_seconds() > cfg.stale_tf_multiplier*chart.TF_SECONDS[cfg.stage("trigger")] else 'current',
         candle_close_price=last.get('close') if last else None,
         candle_close_at=analysis.get('candle_close_at_utc'),
         quality='pending' if reasons else 'current', data_reasons=reasons,
@@ -114,7 +114,8 @@ async def capture(db, uid, wid, member, scheduled_at):
     data = await chart.chart_data(db, uid, member['symbol'], member.get('profile_id'), cfg, include_display=False)
     # Display enrichment is outside chart_data: scores, gates, plans and their
     # identities are already finalized, including unavailable profile inputs.
-    enrich_observer_frames(data)
+    if cfg.schema_version != 'mtf_chart_v3':
+        enrich_observer_frames(data)
     # Fresh public read, no cache and no credentials. Gate ticker has no event
     # timestamp: receipt time is recorded under its own name, never fabricated.
     import httpx
