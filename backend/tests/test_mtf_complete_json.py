@@ -315,6 +315,8 @@ async def test_v3_chart_uses_owned_contract_without_global_indicator_reads(
     from app.services import mtf_chart_v3 as service, mtf_chart_service as chart
     from app.services.market_data_service import market_data_service
     from app.services.mtf_indicator_config import mtf_indicator_identity
+    from app.services import mtf_forming_preview
+    monkeypatch.setattr(mtf_forming_preview, 'forming_preview', lambda *a, **kw: pytest.fail('observer must not calculate intrabar previews'))
 
     cfg = MTFChartConfig.model_validate(raw)
     frames = setup_frames()
@@ -345,6 +347,7 @@ async def test_v3_chart_uses_owned_contract_without_global_indicator_reads(
         object(), uid, "BTC_USDT", None, cfg, include_display=False
     )
     assert data["analysis"]["status"] == "TRIGGERED"
+    assert 'forming_preview' not in data
     assert data["analysis"]["engine_version"] == "mtf_chart_v3"
     assert data["analysis"]["indicator_identity"] == mtf_indicator_identity(cfg, uid)
     assert data["indicator_config"] == {

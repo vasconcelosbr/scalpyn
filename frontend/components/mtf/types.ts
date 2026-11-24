@@ -56,7 +56,13 @@ export interface Analysis {
   plan: Plan | null; score: { total: number; raw?: number | null; maximum: number; components: Record<string, number>; calibrated: false };
   vetoes: string[]; explanation: string[]; unavailable_profile_indicators: string[]; spread_pct: number | null; btc_trend: string | null;
 }
-export interface ChartData { structure_context?: StructureContext | null; symbol: string; frames: Record<string, Frame>; analysis: Analysis; as_of: string; profile: Profile | null; indicator_config: Record<string, unknown>; cursor?: string; transport?: 'full'|'delta'; price_format?: {precision: number; min_move: number; source: string} | null }
+export interface FormingPreview {
+  version: 'mtf_forming_preview_v1'; symbol: string; config_hash: string;
+  state: 'AVAILABLE' | 'UNAVAILABLE'; reason: string | null; confirmation: 'CLOSE_ONLY'; operational_effect: false;
+  observed_at_utc: string; valid_until: string; candle_open_at_utc: string | null; candle_close_at_utc: string | null;
+  refresh_seconds: number; diagnostics: Pick<TriggerDiagnostics, 'checks' | 'patterns'> | null;
+}
+export interface ChartData { forming_preview?: FormingPreview; structure_context?: StructureContext | null; symbol: string; frames: Record<string, Frame>; analysis: Analysis; as_of: string; profile: Profile | null; indicator_config: Record<string, unknown>; cursor?: string; transport?: 'full'|'delta'; price_format?: {precision: number; min_move: number; source: string} | null }
 export interface Profile { id: string; name: string; default_timeframe?: string }
 export interface Watchlist { id: string; name: string; profile_id?: string }
 export interface Asset { structure_context?: StructureContext | null; symbol: string; current_price?: number | null; price_snapshot_at?: string | null; alpha_score?: number | null; profile_id?: string; mtf?: Analysis | null }

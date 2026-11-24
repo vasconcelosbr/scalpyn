@@ -3120,7 +3120,7 @@
           "contains_all": [
             "Caminho até o gatilho",
             "O que falta",
-            "diagnostic.config_hash !== analysis.config_hash"
+            "formingPreviewCurrent(preview, analysis, now)"
           ]
         },
         {
@@ -3134,6 +3134,36 @@
           "contains_all": [
             "crosses_above",
             "UNAVAILABLE"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "mtf-intrabar-preview-isolation",
+      "description": "Display-only forming-candle diagnostics and compact rows never promote the official closed-candle decision.",
+      "files": [
+        {
+          "path": "backend/app/services/mtf_forming_preview.py",
+          "contains_all": [
+            "CLOSE_ONLY",
+            "operational_effect=False",
+            "frame['pivots'] = deepcopy",
+            "diagnostics=dict(checks="
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_forming_preview.py",
+          "contains_all": [
+            "test_forming_values_change_without_changing_official_decision_or_inputs",
+            "test_intrabar_cross_uses_natural_timestamps_and_never_confirms_default_rules"
+          ]
+        },
+        {
+          "path": "frontend/lib/mtfTriggerReadiness.ts",
+          "contains_all": [
+            "formingPreviewCurrent",
+            "preview.confirmation !== 'CLOSE_ONLY'",
+            "now < expires"
           ]
         }
       ]

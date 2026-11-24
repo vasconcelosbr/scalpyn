@@ -17,12 +17,13 @@ def scalar(value):
     )
 
 
-def operand(op, values, series, cutoff):
+def operand(op, values, series, cutoff, *, preview_at=None):
     if op.ref is None:
         return op.value, None
     if op.ref.startswith("indicators."):
         samples = series.get(op.ref, [])
-        points = [p for p in samples if p["close_at"] <= cutoff]
+        points = [p for p in samples if p["close_at"] <= cutoff or (
+            preview_at is not None and p['time'] <= preview_at < p['close_at'])]
         if not points:
             return None, None
         point = points[-1]
@@ -35,7 +36,7 @@ def operand(op, values, series, cutoff):
     return scalar(value), None
 
 
-def evaluate_group(root, values, series, cutoff, *, role="required"):
+def evaluate_group(root, values, series, cutoff, *, role="required", preview_at=None):
     checks = []
 
     def visit(node):
@@ -53,16 +54,16 @@ def evaluate_group(root, values, series, cutoff, *, role="required"):
                 else any(x == "PASS" for x in states)
             )
             return "PASS" if passed else "FAIL"
-        a, point = operand(node.left, values, series, cutoff)
+        a, point = operand(node.left, values, series, cutoff, preview_at=preview_at)
         b, _ = operand(
             node.right,
             values,
             series,
             (
                 point["close_at"]
-                if point and node.operator.startswith("crosses_")
+                if preview_at is None and point and node.operator.startswith("crosses_")
                 else cutoff
-            ),
+            ), preview_at=preview_at,
         )
         state = "DISABLED" if not node.enabled else "UNAVAILABLE"
         previous = None

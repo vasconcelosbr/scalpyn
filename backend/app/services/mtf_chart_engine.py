@@ -162,8 +162,16 @@ def indicator_history(candles: list[dict], config: dict, families: set[str], win
     return series
 
 
-def prepare_frame(candles, tf, as_of, indicator_config, families, cfg, window=None, history=None):
-    closed = closed_candles(candles, tf, as_of)
+def preview_candles(candles, tf, now):
+    """UI-only working copy; never mark source candles closed or persist this domain."""
+    duration = TF_SECONDS[tf]
+    domain = [dict(c, is_closed=True) if c['time'] <= now < c['time'] + duration else dict(c)
+              for c in candles if c['time'] <= now]
+    return closed_candles(domain, tf, now - now % duration + duration)
+
+
+def prepare_frame(candles, tf, as_of, indicator_config, families, cfg, window=None, history=None, *, forming_at=None):
+    closed = closed_candles(candles, tf, as_of) if forming_at is None else preview_candles(candles, tf, forming_at)
     if history is None:
         series = indicator_history(closed, indicator_config, families, window=window)
     else:
@@ -187,7 +195,7 @@ def prepare_frame(candles, tf, as_of, indicator_config, families, cfg, window=No
             "atr": atr_map.get(closed[-1]["time"]) if closed else None}
 
 
-def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_pct: float | None, btc_trend: str | None, *, rule_series=None, flow=None) -> dict[str, Any]:
+def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_pct: float | None, btc_trend: str | None, *, rule_series=None, flow=None, preview_at=None) -> dict[str, Any]:
     structure_tf, zone_tf, trigger_tf = (cfg.stage(k) for k in ('structure','zone','trigger'))
     result: dict[str, Any] = {"symbol": symbol, "market": "spot", "mode": "SHADOW", "operational_effect": False,
         "engine_version": cfg.schema_version, "evaluated_at_utc": iso(as_of), "candle_closed_5m": None,
@@ -272,7 +280,7 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         values['flow']['capital'] = {tf: reading if reading.get('state') != 'unavailable' else {}
             for tf, reading in (flow or {}).get('capital', {}).items()}
         def run(root, role, key, points=None):
-            state, checks = evaluate_group(root, values, rule_series or {}, as_of, role=role)
+            state, checks = evaluate_group(root, values, rule_series or {}, as_of, role=role, preview_at=preview_at)
             rule_checks.extend(checks)
             from .mtf_trigger_diagnostics import check
             row = check('rules:'+key, key, None if state=='UNAVAILABLE' else state=='PASS', '=', role!='veto', role=role, enabled=state!='DISABLED')
