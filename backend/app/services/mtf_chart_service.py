@@ -243,6 +243,10 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
                 'indicator_config': indicators, 'market_context': book,
                 'profile_config': profile.config if profile else None,
                 'as_of': analysis['observed_at_utc']}
+    from .mtf_forming_preview import forming_preview
+    preview = await asyncio.to_thread(forming_preview, symbol, raw, frames, cfg, now, spread, btc_trend,
+                                     indicators=indicators, families=families,
+                                     windows={tf: calculation_window(indicators, tf) for tf in raw})
     for tf, frame in frames.items():
         display_zones = frame_zones(frame, tf, cfg, frames['5m']['candles'][-1]['close']) if frames['5m']['candles'] and frame.get('atr') else []
         try:
@@ -264,7 +268,7 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
         frame["source"] = "gate.io"
         frame["stale"] = not raw[tf] or now-(raw[tf][-1]["time"]+TF_SECONDS[tf]) > cfg.stale_tf_multiplier*TF_SECONDS[tf]
     price_format = await pair_price_format(symbol, cfg)
-    return {"symbol": symbol, "frames": frames, "analysis": analysis, 'price_format': price_format,
+    return {"symbol": symbol, "frames": frames, "analysis": analysis, 'price_format': price_format, 'forming_preview': preview,
             "profile": {"id": str(profile.id), "name": profile.name, "default_timeframe": (profile.config or {}).get("default_timeframe")} if profile else None,
             "indicator_config": indicators, "as_of": analysis["observed_at_utc"]}
 

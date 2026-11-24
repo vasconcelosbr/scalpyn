@@ -1,4 +1,16 @@
-import type { TriggerCheck } from '../components/mtf/types';
+import type { Analysis, FormingPreview, TriggerCheck } from '../components/mtf/types';
+
+export function formingPreviewCurrent(preview: FormingPreview | undefined, analysis: Analysis, now: number): boolean {
+  if (!preview || preview.version !== 'mtf_forming_preview_v1' || preview.confirmation !== 'CLOSE_ONLY' ||
+      preview.operational_effect !== false || preview.state !== 'AVAILABLE' || !preview.diagnostics ||
+      preview.symbol !== analysis.symbol || preview.config_hash !== analysis.config_hash) return false;
+  const start = Date.parse(preview.candle_open_at_utc ?? '');
+  const end = Date.parse(preview.candle_close_at_utc ?? '');
+  const observed = Date.parse(preview.observed_at_utc);
+  const expires = Date.parse(preview.valid_until);
+  return [start, end, observed, expires].every(Number.isFinite) && start <= observed && observed < end &&
+    observed <= now && now < expires && expires <= end;
+}
 
 export function remainingToTrigger(row: TriggerCheck): { action: string; amount?: number } {
   if (row.state === 'PASS') return { action: 'Atendido' };

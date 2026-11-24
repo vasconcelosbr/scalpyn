@@ -414,7 +414,7 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
         {band?.state==='CONFIRMED' && band.entry!=null && <p>Entrada confirmada para simulação: {formatPrice(band.entry)}.</p>}
         <p>Faixa da avaliação de {date(Date.parse(band!.evaluated_at)/1000)}, válida até {date(Date.parse(band!.valid_until)/1000)}. Guia atual de proximidade; não representa entradas históricas nem aprovação de todos os preços da faixa.</p>
       </> : <p>{band?.reason==='NO_SUPPORT'?'Sem suporte confirmado selecionado pela análise.':'Sem avaliação atual válida para desenhar a faixa.'}</p>}
-      <MTFTriggerReadiness analysis={data.analysis} current={analysisCurrent && bandAvailable} date={date}/>
+      <MTFTriggerReadiness analysis={data.analysis} preview={data.forming_preview} current={analysisCurrent && bandAvailable} timezone={preferences.timezone}/>
     </section>}
     <div className="mtf-chart-scroll"><div ref={host} style={{width:'100%',height}} /></div>
     <div className="mtf-hover-detail">{showTarget && candle && <span className="mtf-target-value">{targetTitle} {formatPrice(target.find(p=>p.time===candle.time)?.value ?? NaN)} · </span>}{candle&&Object.entries(frame.indicators).flatMap(([name,points])=>{const point=points.find(p=>p.time===candle.time);return point?[`${name.toUpperCase()} ${number(point.value,4)}`]:[];}).join(' · ')}<br/>{frame.patterns.filter(p=>p.time===candle?.time).map(p=>patternLabels[p.pattern]??'Padrão').join(' · ')}</div>

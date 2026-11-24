@@ -16,6 +16,7 @@ from .mtf_chart_engine import (
     evaluate,
     frame_zones,
     iso,
+    preview_candles,
 )
 from .mtf_btc_context import frozen_frame
 from .mtf_trigger_diagnostics import finalize_diagnostics
@@ -26,7 +27,7 @@ from .mtf_indicator_config import mtf_indicator_identity
 _CACHE = OrderedDict()
 
 
-def calculate_frames(raw, cfg, cutoff):
+def calculate_frames(raw, cfg, cutoff, *, forming_at=None):
     frames, series, errors = {}, {}, {}
     required = set(cfg.frame_atr.values()) | {
         key for key, i in cfg.indicators.items() if i.display
@@ -41,7 +42,7 @@ def calculate_frames(raw, cfg, cutoff):
 
     for tf in cfg.active_timeframes():
         try:
-            candles = closed_candles(raw[tf], tf, cutoff)
+            candles = closed_candles(raw[tf], tf, cutoff) if forming_at is None else preview_candles(raw[tf], tf, forming_at)
             instances = {
                 key: i
                 for key, i in cfg.indicators.items()
@@ -108,6 +109,7 @@ def calculate_frames(raw, cfg, cutoff):
                 cfg,
                 window=core.sample_window,
                 history={"atr": history["atr"]},
+                forming_at=forming_at,
             )
             frame["indicators"].update(history)
             frame["indicator_sample_count"] = core.sample_window
@@ -279,6 +281,10 @@ async def chart_data_v3(db, uid, symbol, profile_id, cfg, include_display):
         data['rule_series'] = series
         data['replay_evaluated_at'] = now
         return data
+    from .mtf_forming_preview import forming_preview
+    preview_flow = await load_context(db, uid, symbol, iso(now), cfg.pump_flow)
+    data['forming_preview'] = await asyncio.to_thread(forming_preview, symbol, raw, frames, cfg, now,
+                                                     spread, btc, flow=preview_flow)
     for tf, frame in frames.items():
         frame["zones"] = (
             frame_zones(frame, tf, cfg, frames[trigger]["candles"][-1]["close"])
