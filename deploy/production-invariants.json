@@ -3110,6 +3110,33 @@
           "contains_all": []
         }
       ]
+    },
+    {
+      "id": "mtf-candidate-trigger-readiness",
+      "description": "Candidate band displays evaluated trigger gaps, alternatives and animated updates without intrabar confirmation.",
+      "files": [
+        {
+          "path": "frontend/components/mtf/MTFTriggerReadiness.tsx",
+          "contains_all": [
+            "Caminho até o gatilho",
+            "O que falta",
+            "diagnostic.config_hash !== analysis.config_hash"
+          ]
+        },
+        {
+          "path": "frontend/components/shadow-portfolio/TradeCandlestickChart.tsx",
+          "contains_all": [
+            "<MTFTriggerReadiness"
+          ]
+        },
+        {
+          "path": "frontend/lib/mtfTriggerReadiness.test.ts",
+          "contains_all": [
+            "crosses_above",
+            "UNAVAILABLE"
+          ]
+        }
+      ]
     }
   ]
 }
