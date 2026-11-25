@@ -1,4 +1,5 @@
 import asyncio
+import json
 import importlib.util
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -39,6 +40,41 @@ def test_barrier_chronology(o,h,l,status,price):
 
 def test_missing_stop_never_invents_loss():
     assert barrier(dict(open=100,high=100,low=1),100,101,None) is None
+
+
+def test_export_has_all_candles_and_raw_snapshots_with_owner_isolation(replay_db):
+    from app.api.mtf_signal_replay import export_json
+    db,uid=replay_db;adapter=Adapter(db)
+    at=datetime(2026,1,1,tzinfo=timezone.utc)
+    async def check():
+        original=payload(at)
+        original['indicators']=[{'name':'rsi','value':None,'quality':'missing'}]
+        await record(adapter,uid,'H4',original,HistoryConfig())
+        rid=db.scalar(sa.text('SELECT id FROM mtf_signal_replays'))
+        db.execute(sa.text('''INSERT INTO mtf_replay_candles(replay_id,time,payload)
+            SELECT :rid, CAST(:at AS timestamptz)+i*interval '1 minute',
+                jsonb_build_object('time',CAST(:at AS timestamptz)+i*interval '1 minute','close',100)
+            FROM generate_series(0,1001) i'''),dict(rid=rid,at=at))
+        db.execute(sa.text('''INSERT INTO mtf_replay_snapshots(replay_id,identity,captured_at,payload)
+            VALUES(:rid,'a',:at,CAST(:a AS jsonb)),
+                  (:rid,'b',:at,CAST(:b AS jsonb))'''),dict(rid=rid,at=at,
+                      a=json.dumps({'indicators':[{'name':'rsi','value':42}]}),
+                      b=json.dumps({'indicators':[{'name':'adx','value':25}]})))
+        response=await export_json(rid,db=adapter,uid=uid)
+        exported=json.loads(response.body)
+        assert exported['schema_version']=='mtf_signal_replay_export_v1'
+        assert len(exported['candles'])==1002  # Not limited by trajectory pagination.
+        assert len(exported['snapshots'])==2  # Same timestamp must not discard a capture.
+        assert exported['replay']['snapshot']['indicators']==original['indicators']
+        assert exported['replay']['snapshot']['replay_inputs']=={'frozen':True}
+        assert exported['progress']['status']=='OPEN' and exported['metadata']['ongoing']
+        assert exported['historical_observations']==[]
+        assert response.headers['cache-control']=='private, no-store'
+        assert response.headers['content-disposition'].endswith('.json"')
+        with pytest.raises(HTTPException) as exc:
+            await export_json(rid,db=adapter,uid=uuid4())
+        assert exc.value.status_code==404
+    asyncio.run(check())
 
 
 @pytest.fixture
@@ -136,6 +172,13 @@ def test_bootstrap_uses_frozen_history_not_current_prices(replay_db):
         from app.api.mtf_signal_replay import trajectory
         result=await trajectory(rows[0]['id'],Response(),limit=100,db=adapter,uid=uid)
         assert result['next_cursor'] is None
+        from app.api.mtf_signal_replay import export_json
+        db.execute(sa.text('UPDATE mtf_replay_progress SET next_at=:until WHERE replay_id=:id'),
+                   {'id':rows[0]['id'],'until':at+timedelta(minutes=11)})
+        exported=json.loads((await export_json(rows[0]['id'],db=adapter,uid=uid)).body)
+        assert len(exported['historical_observations'])==2
+        assert all(h['payload']['replay_inputs']=={'frozen':True}
+                   for h in exported['historical_observations'])
         stale=payload(at+timedelta(minutes=35),'NO_TRADE')
         stale['analysis']['vetoes']=['DATA_STALE:5m']
         await record(adapter,uid,'H4',stale,HistoryConfig())

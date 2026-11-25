@@ -1,12 +1,52 @@
 """Owner-scoped immutable signal evidence; no watchlist membership dependency."""
 from datetime import datetime
+import json
+import re
 from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi.encoders import jsonable_encoder
 from sqlalchemy import text
 from ..database import get_db
 from .config import get_current_user_id
 
 router = APIRouter(prefix='/api/mtf/replays', tags=['MTF signal replay'])
+
+
+@router.get('/{rid}/export')
+async def export_json(rid: UUID, db=Depends(get_db), uid=Depends(get_current_user_id)):
+    # One statement gives a consistent database snapshot even while progress advances.
+    row = (await db.execute(text('''SELECT statement_timestamp() AS exported_at,
+        to_jsonb(r) AS replay, to_jsonb(p) AS progress,
+        COALESCE((SELECT jsonb_agg(to_jsonb(c) ORDER BY c.time)
+            FROM mtf_replay_candles c WHERE c.replay_id=r.id), '[]'::jsonb) AS candles,
+        COALESCE((SELECT jsonb_agg(to_jsonb(s) ORDER BY s.captured_at,s.identity)
+            FROM mtf_replay_snapshots s WHERE s.replay_id=r.id), '[]'::jsonb) AS snapshots,
+        COALESCE((SELECT jsonb_agg(to_jsonb(h) ORDER BY h.observed_at,h.id)
+            FROM mtf_history_observations h WHERE h.user_id=r.user_id
+            AND h.watchlist_id=r.watchlist_id AND h.symbol=r.symbol
+            AND h.profile_id IS NOT DISTINCT FROM r.profile_id
+            AND h.observed_at>=r.triggered_at AND h.observed_at<=p.next_at
+            AND r.snapshot->>'capture_kind'='reconstructed_from_frozen_observations'),
+            '[]'::jsonb) AS historical_observations
+        FROM mtf_signal_replays r JOIN mtf_replay_progress p ON p.replay_id=r.id
+        WHERE r.id=:id AND r.user_id=:uid'''), {'id': rid, 'uid': uid})).mappings().first()
+    if not row:
+        raise HTTPException(404, 'REPLAY_NOT_FOUND')
+    data = dict(row)
+    data.update(schema_version='mtf_signal_replay_export_v1', metadata={
+        'scope': 'All persisted evidence available at exported_at; independent of playback position.',
+        'timestamps': 'ISO 8601 with timezone; numeric candle time is Unix seconds.',
+        'trajectory_timeframe': '1m', 'return_basis': 'gross; no fees or execution costs',
+        'missing_data': 'Missing historical captures are not estimated. Inspect progress.issue and snapshot quality.',
+        'ongoing': data['progress']['status'] == 'OPEN',
+    })
+    symbol = re.sub(r'[^A-Za-z0-9_-]', '_', data['replay']['symbol'])
+    filename = f'mtf-replay-{symbol}-{rid}.json'
+    return Response(json.dumps(jsonable_encoder(data), ensure_ascii=False, indent=2),
+        media_type='application/json', headers={
+            'Content-Disposition': f'attachment; filename="{filename}"',
+            'Cache-Control': 'private, no-store',
+        })
 
 
 @router.get('')

@@ -7,6 +7,15 @@
   },
   "required_features": [
     {
+      "id": "mtf-complete-replay-json-export",
+      "description": "Owner-scoped complete JSON export of replay evidence, independent of playback and pagination.",
+      "files": [
+        {"path": "backend/app/api/mtf_signal_replay.py", "contains_all": ["async def export_json", "mtf_signal_replay_export_v1", "historical_observations", "Content-Disposition"]},
+        {"path": "backend/tests/test_mtf_signal_replay.py", "contains_all": ["test_export_has_all_candles_and_raw_snapshots_with_owner_isolation"]},
+        {"path": "frontend/app/grafico-mtf/replays/page.tsx", "contains_all": ["Baixar JSON completo", "async function downloadReplay"]}
+      ]
+    },
+    {
       "id": "mtf-independent-signal-replay",
       "description": "Confirmed signal activations are recorded independently of Shadow admission, with immutable evidence and chronological outcomes.",
       "files": [
