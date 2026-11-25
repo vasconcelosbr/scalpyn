@@ -12,6 +12,39 @@ logger = logging.getLogger(__name__)
 
 _VALID_SCHEMES = ("redis://", "rediss://", "unix://")
 _DEFAULT_REDIS = object()
+# Single owner of the ``config:`` key namespace in Redis (see _get_cache_key).
+CONFIG_CACHE_PREFIX = "config:"
+
+
+def invalidate_config_cache_sync(redis_url: Optional[str] = None, *, client=None, batch: int = 500) -> Optional[int]:
+    """Drop every cached config after a direct database write (e.g. a migration).
+
+    The cache is read-through with a TTL, so readers repopulate it from the
+    database; nothing is lost. Without this, a migration that edits
+    ``config_profiles`` stays invisible for up to the TTL, and a GUI save made
+    from the stale copy would silently write the old JSON back. Best effort:
+    returns the number of keys removed, or None when Redis is unavailable.
+    """
+    try:
+        if client is None:
+            url = (redis_url if redis_url is not None else settings.REDIS_URL or "").strip()
+            if not url or not any(url.startswith(s) for s in _VALID_SCHEMES):
+                logger.warning("config cache not invalidated: REDIS_URL missing or invalid")
+                return None
+            import redis as redis_sync
+            client = redis_sync.from_url(url)
+        removed, pending = 0, []
+        for key in client.scan_iter(match=CONFIG_CACHE_PREFIX + "*", count=batch):
+            pending.append(key)
+            if len(pending) >= batch:
+                removed += int(client.unlink(*pending) or 0)
+                pending = []
+        if pending:
+            removed += int(client.unlink(*pending) or 0)
+        return removed
+    except Exception as exc:
+        logger.warning("config cache not invalidated after database write: %s", exc)
+        return None
 
 
 def _make_redis_client():
@@ -62,8 +95,8 @@ class ConfigService:
 
     def _get_cache_key(self, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> str:
         if pool_id:
-            return f"config:{user_id}:{pool_id}:{config_type}"
-        return f"config:{user_id}:global:{config_type}"
+            return f"{CONFIG_CACHE_PREFIX}{user_id}:{pool_id}:{config_type}"
+        return f"{CONFIG_CACHE_PREFIX}{user_id}:global:{config_type}"
 
     async def get_config(self, db: AsyncSession, config_type: str, user_id: UUID, pool_id: Optional[UUID] = None) -> Dict[str, Any]:
         cache_key = self._get_cache_key(config_type, user_id, pool_id)

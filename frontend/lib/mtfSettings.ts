@@ -24,6 +24,12 @@ export function settingsDraft(config: MTFConfig | null, boot: Bootstrap): MTFCon
   return next;
 }
 
+// A missing boolean must read as unset, never as the first option: showing "Sim" for an
+// absent key hides that the stored config lacks it, and a save from that screen would
+// not write it.
+export function booleanSelectValue(value: unknown): 'true' | 'false' | '' {
+  return value === true ? 'true' : value === false ? 'false' : '';
+}
 export function configValue(config: unknown, path: string): unknown {
   return path.split('.').reduce<unknown>((value, key) => (value as Record<string, unknown> | null)?.[key], config);
 }
