@@ -23,6 +23,19 @@ const config={schema_version:'mtf_chart_v1',atr_period:null,force_patterns:['ENG
   presentation:{target_pct:1,retry_initial_seconds:3,retry_max_seconds:30}} as unknown as MTFConfig;
 const boot={preset:config,presentation_preset:config.presentation,inherited_atr:{enabled:true,period:14}} as Bootstrap;
 
+test('stop sizing fields round trip independently from the RR veto',()=>{
+  const preset={...config,stop_sizing:{enabled:false,target_pct:1,gross_rr:2}};
+  const draft=settingsDraft(config,{...boot,preset});
+  assert.deepEqual(draft.stop_sizing,preset.stop_sizing);
+  const changed=settingsForSave(withConfigValue(draft,'stop_sizing.enabled',true),config,{...boot,preset});
+  assert.equal(changed.stop_sizing?.enabled,true);
+  assert.equal(changed.min_rr_net,config.min_rr_net);
+  assert.equal(changed.veto_filters,config.veto_filters);
+  const invalid=withConfigValue(changed,'stop_sizing.gross_rr',.001);
+  assert(validateSettings(invalid,{})['stop_sizing.gross_rr']);
+  assert.equal(config.stop_sizing,undefined);
+});
+
 test('entry band is editable without changing inherited ATR, score or veto rules',()=>{
   const context={...boot,presentation_preset:{...boot.presentation_preset,entry_band_enabled:true}};
   const draft=settingsDraft(config,context);
