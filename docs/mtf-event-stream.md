@@ -33,3 +33,7 @@ continuam compactas e animadas. O fechamento da aba cancela a assinatura upstrea
 Valida√ß√£o: proje√ß√£o por eventos em configura√ß√µes legadas e JSON, isolamento do
 status oficial, volume base, ordem temporal, rollover, autentica√ß√£o, propriedade,
 mesclagem sem regress√£o para cache REST e preserva√ß√£o de contexto no frontend.
+
+Eventos pendentes s„o substituÌdos pelo candle mais recente de cada timeframe.
+Enquanto uma projeÁ„o calcula, o leitor continua recebendo o mercado; a prÛxima
+projeÁ„o consome o lote atual, sem reproduzir uma fila de preÁos antigos.
