@@ -64,11 +64,14 @@ def test_authenticated_stream_subscribes_and_cancels_upstream_on_browser_disconn
         async def send(self,message): subscriptions.append(message)
         def __aiter__(self): return self.messages()
         async def messages(self):
-            yield '{}'
+            import json
+            now=time.time()
+            yield json.dumps({'channel':'spot.candlesticks','event':'update','time':now,
+                              'result':{'n':'5m_BTC_USDT','t':int(now//300)*300,'o':10,'h':11,'l':9,'c':10,'a':1}})
             await asyncio.Event().wait()
     async def seed(*args):
         return SimpleNamespace(raw={'5m':[]},cfg=SimpleNamespace(poll_seconds=15),
-                               update=lambda message,now: {'type':'preview','confirmation':'CLOSE_ONLY'})
+                               update_batch=lambda messages,now: {'type':'preview','confirmation':'CLOSE_ONLY'})
     monkeypatch.setattr(mtf_stream,'authorized_seed',seed)
     monkeypatch.setattr(mtf_stream.websockets,'connect',lambda *args,**kwargs:Gate())
     app=FastAPI();app.include_router(mtf_stream.router)

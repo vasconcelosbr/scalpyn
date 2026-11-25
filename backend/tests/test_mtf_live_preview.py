@@ -58,3 +58,22 @@ def test_close_or_rollover_requests_canonical_resync_never_emits_a_trigger():
     rollover=event(live, end); rollover['result']['t']=str(end)
     assert live.update(rollover, end) == {'type':'resync'}
     assert live.raw == original
+
+
+def test_batch_calculates_once_for_all_latest_timeframes(monkeypatch):
+    from app.services import mtf_live_preview as module
+    live, now=setup()
+    calls=[]
+    original=module.forming_preview
+    def counted(*args,**kwargs):
+        calls.append(True)
+        return original(*args,**kwargs)
+    monkeypatch.setattr(module,'forming_preview',counted)
+    messages=[event(live,now,105)]
+    higher=event(live,now,108)
+    higher['result'].update(n='1h_BTC_USDT',t=live.raw['1h'][-1]['time'])
+    messages.append(higher)
+    result=live.update_batch(messages,now)
+    assert len(calls)==1
+    assert result['candles']['5m']['close']==105
+    assert result['candles']['1h']['close']==108

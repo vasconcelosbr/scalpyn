@@ -4,6 +4,7 @@ export interface PreviewEvent {
   type: 'preview'; symbol: string; config_hash: string; timeframe: string;
   profile_id?: string | null; profile_hash?: string | null; indicator_hash?: string | null;
   candle: Candle; preview: FormingPreview;
+  candles?: Record<string, Candle>;
 }
 
 // The live channel cannot replace analysis, status, plans or audio inputs.
@@ -20,8 +21,13 @@ export function applyLivePreview(data: ChartData | null, event: PreviewEvent): C
   if (!Number.isFinite(incoming) || incoming < Date.parse(data.forming_preview?.observed_at_utc ?? '')) return data;
   const frame = data.frames[event.timeframe];
   if (event.candle.time !== frame.candles.at(-1)?.time) return data;
-  return {...data, forming_preview: event.preview, frames: {...data.frames,
-    [event.timeframe]: {...frame, candles: [...frame.candles.slice(0, -1), event.candle]}}};
+  const frames = {...data.frames};
+  for (const [tf, candle] of Object.entries(event.candles ?? {[event.timeframe]:event.candle})) {
+    const current = frames[tf];
+    if (current && candle.closed === false && candle.time === current.candles.at(-1)?.time)
+      frames[tf] = {...current, candles:[...current.candles.slice(0,-1),candle]};
+  }
+  return {...data, forming_preview: event.preview, frames};
 }
 
 export function retainLivePreview(previous: ChartData | null, next: ChartData): ChartData {

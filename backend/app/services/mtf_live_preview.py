@@ -42,6 +42,9 @@ class LivePreview:
         self.windows = windows
 
     def update(self, message, now):
+        return self.update_batch([message], now)
+
+    def absorb(self, message, now):
         parsed = gate_candle(message, self.seed['symbol'], self.raw, now)
         if parsed is None:
             return None
@@ -60,11 +63,24 @@ class LivePreview:
         # Exchange w=true and preview predicates never create an official signal.
         trigger_open = self.raw[trigger][-1]['time']
         if now >= trigger_open + TF_SECONDS[trigger] or candle['time'] > previous['time'] or candle['is_closed']:
-            return {'type': 'resync'}
+            return 'resync'
         if previous.get('is_closed') is True:
-            return {'type': 'resync'}
+            return 'resync'
         self.stamps[key] = stamp
         self.raw[tf][-1] = candle
+        return tf, candle, stamp
+
+    def update_batch(self, messages, now):
+        latest = None
+        for message in messages:
+            accepted = self.absorb(message, now)
+            if accepted == 'resync':
+                return {'type': 'resync'}
+            if accepted:
+                latest = accepted
+        if latest is None:
+            return None
+        tf, candle, stamp = latest
         analysis = self.seed['analysis']
         preview = forming_preview(self.seed['symbol'], self.raw, self.seed['frames'], self.cfg,
                                   now, analysis.get('spread_pct'), analysis.get('btc_trend'),
@@ -74,4 +90,5 @@ class LivePreview:
         return dict(type='preview', symbol=self.seed['symbol'], config_hash=analysis['config_hash'],
                     profile_hash=analysis.get('profile_hash'), profile_id=analysis.get('profile_id'),
                     indicator_hash=(analysis.get('indicator_identity') or {}).get('config_hash'),
+                    candles={key: {**rows[-1], 'closed': False} for key, rows in self.raw.items() if rows and not rows[-1].get('is_closed')},
                     preview=preview, timeframe=tf, candle={**candle, 'closed': False})
