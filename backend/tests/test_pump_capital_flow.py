@@ -129,3 +129,30 @@ async def test_history_binds_typed_params_and_ranks_hours():
     assert isinstance(calls["off"], timedelta) and isinstance(calls["since"], datetime)
     assert out["top_inflow"][0]["hour"] == "2026-10-07T09:00" and out["top_outflow"][0]["hour"] == "2026-10-07T10:00"
     assert {h["hour"] for h in out["hour_of_day"]} == {9, 10}  # the 10-minute hour is excluded
+
+
+def test_capital_minutes_never_counts_complete_bucket_without_quote_as_zero_flow():
+    s = spec(window_minutes=1)
+    buckets = {"BTC_USDT": {60_000: {"buy_quote": None, "sell_quote": None, "partial": False}},
+               "ETH_USDT": {60_000: {"buy_quote": 3, "sell_quote": 1, "partial": False}}}
+    out = svc.capital_minutes(buckets, ["BTC_USDT", "ETH_USDT"], 60_000, s)
+    assert out == [{"minute_ms": 60_000, "buy_usdt": 3.0, "sell_usdt": 1.0, "symbols": 2, "complete_symbols": 1}]
+
+
+def test_capital_revisions_cover_reprocessed_minutes_but_never_restamp_window_fields():
+    cap = [{"minute_ms": m * 60_000, "buy_usdt": 10.0 * m, "sell_usdt": 4.0, "symbols": 24, "complete_symbols": 24}
+           for m in range(1, 8)]
+    out = svc.capital_revisions("u", cap, [m * 60_000 for m in range(3, 8)])
+    # lookback 3..7; minute 7 is published by the regular upsert with its window fields
+    assert [int(r["minute"].timestamp()) for r in out] == [180, 240, 300, 360]
+    assert set(out[0]) == {"user_id", "minute", "buy_usdt", "sell_usdt", "net_usdt", "symbols", "complete_symbols"}
+    assert out[0]["net_usdt"] == 26.0
+    assert svc.capital_revisions("u", cap, [7 * 60_000]) == []
+
+
+def test_capital_revision_sql_is_non_degrading_and_keeps_window_fields():
+    sql = str(svc._REVISE_CAPITAL)
+    assert "symbols = :symbols" in sql and "complete_symbols <= :complete_symbols" in sql
+    assert "IS DISTINCT FROM" in sql
+    for column in ("window_ratio", "window_net_usdt", "state", "z ", "method", "config_version"):
+        assert column not in sql.split("WHERE")[0]

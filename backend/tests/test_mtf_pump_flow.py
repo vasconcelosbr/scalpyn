@@ -115,3 +115,16 @@ def test_sql_ownership_and_time_boundaries():
     assert "e.payload->'pump_flow'->'config'->>'enabled'='true'" in REPORT_SQL
     for sql in [CAPITAL_SQL,ASSET_SQL,REPORT_SQL]:
         assert not any(word in sql.upper().split() for word in ['INSERT','UPDATE','DELETE'])
+
+
+def test_unavailable_reason_separates_low_coverage_from_delayed_trailing_minute():
+    low = summarize(minutes(3), 5, CUT, KNOWN, .8)
+    assert low['reason'] == 'incomplete_window' and low['trailing_minute_ready'] is True
+    late = summarize(minutes(5)[:-1], 5, CUT, KNOWN, .8)
+    assert late['coverage'] == .8 and late['reason'] == 'delayed_window' and late['trailing_minute_ready'] is False
+    quiet = summarize(minutes(5, buy=0, sell=0), 5, CUT, KNOWN, .8)
+    assert quiet['reason'] == 'no_trades'
+    # Incident 25/11 18:30Z: complete_symbols 1, 2, 24, 24, 24 of 24 -> 75/120.
+    rows = [{**r, 'symbols': 24, 'complete_symbols': c} for r, c in zip(minutes(5), (1, 2, 24, 24, 24))]
+    incident = summarize(rows, 5, CUT, KNOWN, .8, capital=True)
+    assert incident['coverage'] == .625 and incident['reason'] == 'incomplete_window'

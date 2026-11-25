@@ -289,3 +289,69 @@ def test_cp8_pump_radar_research_uses_shared_measures():
         pd.DataFrame({"volume": [float(r.volume_base) for r in history]}))
     assert values["rvol_strict"] == live["rvol_strict"]
     assert "delta_norm" in research.NON_OHLCV and "cvd_60m" in research.NON_OHLCV
+
+
+# ── Fail-closed coverage certification (incident 25/11/2026 18:24Z) ──────────
+
+class _BufferRedis:
+    """Trades buffer with every 10 s liveness slot present unless a read is made to fail."""
+
+    def __init__(self, members, *, fail_liveness=False, fail_handover=False):
+        self.members, self.fail_liveness, self.fail_handover = members, fail_liveness, fail_handover
+
+    async def zrangebyscore(self, key, lo, hi):
+        from app.websocket.event_handlers import WS_ALIVE_KEY
+        if key == WS_ALIVE_KEY:
+            if self.fail_liveness:
+                raise TimeoutError("Timeout connecting to server")
+            first = int(lo) // 10 * 10
+            return [str(s).encode() for s in range(first, int(hi) + 10, 10)]
+        return self.members
+
+    async def zrange(self, key, start, stop, withscores=False):
+        return [(self.members[0], 0.0)] if self.members else []
+
+    async def zcard(self, key):
+        return len(self.members)
+
+    async def get(self, key):
+        if self.fail_handover:
+            raise TimeoutError("Timeout connecting to server")
+        return None
+
+
+async def _raw_rows(redis):
+    import time
+    from unittest.mock import AsyncMock, patch
+    from app.services.order_flow_service import read_raw_trades
+    now_ms = int(time.time() * 1000)
+    since = now_ms // M * M - 3 * M
+    minutes = [since, since + M, since + 2 * M]
+    redis.members = [f'{{"s":"buy","a":"1","t":{since + 1000},"p":"10"}}|1'.encode()]
+    with patch("app.services.redis_client.get_async_redis", AsyncMock(return_value=redis)):
+        raw = await read_raw_trades("BTC_USDT", since_ms=since)
+    return fm.materialize_buckets(fm.bucket_trades(raw["trades"]), minutes,
+                                  covered_from_ms=raw["covered_from_ms"], source=raw["source"],
+                                  gap_reason=raw["gap_reason"], alive_slots=raw.get("alive_slots"),
+                                  gap_windows=raw.get("gap_windows") or ())
+
+
+@pytest.mark.asyncio
+async def test_raw_trades_certify_quiet_minutes_only_with_readable_liveness():
+    healthy = await _raw_rows(_BufferRedis([]))
+    assert [r["partial"] for r in healthy] == [False, False, False]
+    assert healthy[1]["buy_quote"] == 0.0  # covered quiet minute: real zero flow
+
+    # A Redis timeout on the liveness read used to skip the WS check and certify
+    # every empty minute as a complete zero-flow bucket.
+    blind = await _raw_rows(_BufferRedis([], fail_liveness=True))
+    assert all(r["partial"] for r in blind)
+    assert {r["gap_reason"] for r in blind} == {"ws_liveness_unavailable"}
+    assert blind[1]["buy_quote"] is None
+
+
+@pytest.mark.asyncio
+async def test_raw_trades_unreadable_handover_tombstone_never_certifies():
+    rows = await _raw_rows(_BufferRedis([], fail_handover=True))
+    assert all(r["partial"] for r in rows)
+    assert {r["gap_reason"] for r in rows} == {"ws_handover_state_unavailable"}

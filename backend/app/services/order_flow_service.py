@@ -525,8 +525,12 @@ async def read_raw_trades(symbol: str, since_ms: float, market_type: str = "spot
             try:
                 raw_handover = await redis.get(_HANDOVER_TOMBSTONE_KEY)
                 handover_ms = float(raw_handover) if raw_handover is not None else None
-            except Exception:
+            except Exception as exc:
+                # Fail-closed: an unreadable tombstone cannot prove that no
+                # handover happened inside the range, so no minute is certified.
+                logger.warning("[OrderFlow] handover tombstone read failed for %s: %s", symbol, exc)
                 handover_ms = None
+                gap_windows.append((since_ms, now_ms, "ws_handover_state_unavailable"))
             if handover_ms is not None:
                 gap_windows.append((handover_ms, handover_ms + _HANDOVER_TAINT_WINDOW_SECONDS * 1000.0,
                                     "ws_leader_handover"))
@@ -537,7 +541,10 @@ async def read_raw_trades(symbol: str, since_ms: float, market_type: str = "spot
                     raw_slots = await redis.zrangebyscore(WS_ALIVE_KEY, since_ms / 1000.0, now_ms / 1000.0)
                     alive_slots = {int(float(s.decode() if isinstance(s, bytes) else s)) for s in raw_slots}
                 except Exception as exc:
-                    logger.debug("[OrderFlow] WS liveness read failed: %s", exc)
+                    # Fail-closed: without the liveness slots a quiet minute cannot be
+                    # told apart from a WS outage, so the whole range stays partial.
+                    logger.warning("[OrderFlow] WS liveness read failed for %s: %s", symbol, exc)
+                    gap_windows.append((since_ms, now_ms, "ws_liveness_unavailable"))
             return {"trades": trades, "covered_from_ms": covered_from,
                     "source": f"gate_trades_ws_{market_type}", "gap_reason": None,
                     "alive_slots": alive_slots, "gap_windows": gap_windows}

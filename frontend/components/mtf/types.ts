@@ -173,8 +173,20 @@ export function visibleMarks(frame: Frame, config: Presentation, preferences: Pr
   return selected.sort((a,b)=>a.time-b.time);
 }
 
-export function reasonLabel(code: string, config?: Presentation) {
-  const [key, suffix] = code.split(':');
+// RISK_AUDIT vetoes carry the full check id after the prefix ("RISK_AUDIT:audit:zone_alignment").
+// The frozen audit checks hold the backend label, timeframe and state, so each veto names
+// the check that failed instead of collapsing into a generic "(AUDIT)".
+export function reasonLabel(code: string, config?: Presentation, checks?: TriggerCheck[]) {
+  const sep = code.indexOf(':');
+  const key = sep < 0 ? code : code.slice(0, sep);
+  const suffix = sep < 0 ? '' : code.slice(sep + 1);
+  if (key === 'RISK_AUDIT' && suffix) {
+    const title = config?.reason_labels[key] ?? 'Auditoria de risco';
+    const check = checks?.find(c => c.id === suffix);
+    if (!check) return `${title}: verificação não atendida`;
+    const tf = check.timeframe ? ` · ${check.timeframe.toUpperCase()}` : '';
+    return `${title}: ${check.label}${tf} — ${check.state === 'UNAVAILABLE' ? 'dado indisponível' : 'reprovado'}`;
+  }
   const label = config?.reason_labels[key] ?? (key === 'INVALID_PLAN' ? 'Plano inválido: entrada, stop ou risco inconsistente' : 'Condição de análise indisponível');
   return suffix ? `${label} (${suffix.toUpperCase()})` : label;
 }

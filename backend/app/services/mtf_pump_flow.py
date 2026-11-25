@@ -57,8 +57,15 @@ def summarize(rows, minutes, cutoff, known_at, min_coverage, *, capital=False):
               'buy_persistence': sum(float(r['buy_usdt']) > float(r['sell_usdt']) for r in usable)/len(usable) if usable else None,
               'latest_minute': max((utc(r['minute']) for r in usable), default=None)}
     # Missing the trailing minute is different from a complete, quiet minute.
-    result['state'] = 'available' if coverage >= min_coverage and gross > 0 and result['latest_minute'] == cutoff-timedelta(minutes=1) else 'unavailable'
-    result['reason'] = None if result['state'] == 'available' else 'no_trades' if gross == 0 and coverage >= min_coverage else 'incomplete_or_delayed_window'
+    trailing_ready = result['latest_minute'] == cutoff-timedelta(minutes=1)
+    result['trailing_minute_ready'] = trailing_ready
+    result['state'] = 'available' if coverage >= min_coverage and gross > 0 and trailing_ready else 'unavailable'
+    # Distinct causes: coverage below the minimum (data gap) vs. enough coverage but the
+    # last closed minute not published yet (read before the Pump cycle consolidated it).
+    result['reason'] = (None if result['state'] == 'available'
+                        else 'incomplete_window' if coverage < min_coverage
+                        else 'delayed_window' if not trailing_ready
+                        else 'no_trades')
     result['latest_minute'] = result['latest_minute'].isoformat() if result['latest_minute'] else None
     return result
 
