@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/api';
-import { createChart, CandlestickSeries, createSeriesMarkers, ColorType, type UTCTimestamp } from 'lightweight-charts';
+import { createChart, CandlestickSeries, createSeriesMarkers, ColorType, type Time, type UTCTimestamp } from 'lightweight-charts';
 import './style.css';
 
 type Indicator = {name:string;timeframe:string;value:unknown;source_at?:string;quality:string;producer?:string};
@@ -23,7 +23,7 @@ function ReplayChart({replay,bars,at}:{replay:Replay;bars:Candle[];at:number}){
   const host=useRef<HTMLDivElement>(null);
   useEffect(()=>{
     if(!host.current)return;
-    const chart=createChart(host.current,{autoSize:true,height:360,layout:{background:{type:ColorType.Solid,color:'#0b111b'},textColor:'#91a5bd'},grid:{vertLines:{color:'#182333'},horzLines:{color:'#182333'}},timeScale:{timeVisible:true,secondsVisible:false,rightOffset:6,tickMarkFormatter:t=>typeof t==='number'?new Date(t*1000).toLocaleTimeString('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit'}):String(t)},localization:{timeFormatter:(t:number)=>date(t)}});
+    const chart=createChart(host.current,{autoSize:true,height:360,layout:{background:{type:ColorType.Solid,color:'#0b111b'},textColor:'#91a5bd'},grid:{vertLines:{color:'#182333'},horzLines:{color:'#182333'}},timeScale:{timeVisible:true,secondsVisible:false,rightOffset:6,tickMarkFormatter:(t:Time)=>typeof t==='number'?new Date(t*1000).toLocaleTimeString('pt-BR',{timeZone:'America/Sao_Paulo',hour:'2-digit',minute:'2-digit'}):String(t)},localization:{timeFormatter:(t:number)=>date(t)}});
     const series=chart.addSeries(CandlestickSeries,{upColor:'#4fd3ad',downColor:'#ed8192',borderVisible:false,wickUpColor:'#4fd3ad',wickDownColor:'#ed8192'});
     const unique=new Map(bars.map(c=>[time(c.time),c]));
     const sorted=[...unique].sort((a,b)=>a[0]-b[0]);
