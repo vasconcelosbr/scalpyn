@@ -39,7 +39,7 @@ export function MTFTriggerReadiness({ analysis, preview, current, timezone = 'UT
   const confirmed = analysis.status === 'TRIGGERED';
   return <section className={`mtf-readiness tracking`} aria-label="Caminho até o gatilho">
     <div className="mtf-readiness-heading"><strong>{confirmed ? <CheckCircle2 size={16}/> : <Activity size={16}/>} Prévia · candle em formação</strong><span role="status">{pending.length ? `${blockers.length} pendentes · ${waiting.length} aguardando` : 'Prévia atendida — aguardando fechamento'}</span></div>
-    <p>Atualizado {time(preview.observed_at_utc)} · consulta a cada {preview.refresh_seconds}s · fechamento previsto {time(preview.candle_close_at_utc)}. {confirmed ? 'Gatilho oficial confirmado no candle anterior.' : 'Confirmação oficial somente no fechamento.'}</p>
+    <p>Atualizado {time(preview.observed_at_utc)} · {preview.delivery === 'stream' ? 'Ao vivo · eventos da Gate.io' : 'Conectando ao vivo · consulta de recuperação'} · fechamento previsto {time(preview.candle_close_at_utc)}. {confirmed ? 'Gatilho oficial confirmado no candle anterior.' : 'Confirmação oficial somente no fechamento.'}</p>
     <p>Indicadores do candle aberto podem mudar. Pivôs e tendência do BTC permanecem confirmados; capital e fluxo mantêm o horário de sua fonte.</p>
     {blockers.map(row => <Condition key={row.id} row={row}/>)}
 

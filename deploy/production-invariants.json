@@ -3167,6 +3167,35 @@
           ]
         }
       ]
+    },
+    {
+      "id": "mtf-event-driven-preview",
+      "description": "Authenticated Gate candle stream updates only intrabar diagnostics and reseeds at close.",
+      "files": [
+        {
+          "path": "backend/app/services/mtf_live_preview.py",
+          "contains_all": [
+            "class LivePreview",
+            "forming_preview",
+            "resync"
+          ]
+        },
+        {
+          "path": "backend/tests/test_mtf_live_preview.py",
+          "contains_all": [
+            "test_events_recalculate_immediately_and_cannot_mutate_official_signal",
+            "test_close_or_rollover_requests_canonical_resync_never_emits_a_trigger"
+          ]
+        },
+        {
+          "path": "frontend/lib/mtfLivePreview.ts",
+          "contains_all": [
+            "applyLivePreview",
+            "retainLivePreview",
+            "event.preview.confirmation !== 'CLOSE_ONLY'"
+          ]
+        }
+      ]
     }
   ]
 }

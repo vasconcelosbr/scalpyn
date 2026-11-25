@@ -46,6 +46,7 @@ export interface Analysis {
       pivots_used: Pivot[]; reference_candle: {open_at: string; close_at: string; close: number} | null}>;
   };
   profile_id?: string | null;
+  profile_hash?: string | null; indicator_identity?: {config_hash?: string};
   entry_candidate?: EntryCandidate | null;
   pump_flow?: PumpFlowContext;
   trigger_diagnostics?: TriggerDiagnostics;
@@ -57,6 +58,7 @@ export interface Analysis {
   vetoes: string[]; explanation: string[]; unavailable_profile_indicators: string[]; spread_pct: number | null; btc_trend: string | null;
 }
 export interface FormingPreview {
+  delivery?: 'stream'; source_event_at?: number;
   version: 'mtf_forming_preview_v1'; symbol: string; config_hash: string;
   state: 'AVAILABLE' | 'UNAVAILABLE'; reason: string | null; confirmation: 'CLOSE_ONLY'; operational_effect: false;
   observed_at_utc: string; valid_until: string; candle_open_at_utc: string | null; candle_close_at_utc: string | null;
