@@ -119,6 +119,17 @@ test('complete JSON draft uses effective conversion without mutating saved legac
   assert.equal(settingsDraft(changed,context).timeframes?.trigger,'1h');
 });
 
+test('audit settings round trip without changing existing stop or veto policy',()=>{
+  const original=structuredClone(config);
+  const changed=withConfigValue(config,'context_audit.enabled',true);
+  const threshold=withConfigValue(changed,'context_audit.min_stop_atr_trigger',1.5);
+  assert.equal(threshold.context_audit?.enabled,true);
+  assert.equal(threshold.context_audit?.min_stop_atr_trigger,1.5);
+  assert.deepEqual(threshold.stop_sizing,original.stop_sizing);
+  assert.deepEqual(threshold.veto_filters,original.veto_filters);
+  assert.deepEqual(config,original);
+});
+
 test('recursive JSON schema accepts all operand alternatives and reports invalid nested values',()=>{
   const schema:ConfigSchema={type:'object',properties:{rules:{$ref:'#/$defs/Group'}},$defs:{
     Group:{type:'object',required:['conditions'],additionalProperties:false,properties:{conditions:{type:'array',items:{anyOf:[{$ref:'#/$defs/Leaf'},{$ref:'#/$defs/Group'}]}}}},

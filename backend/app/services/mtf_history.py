@@ -164,7 +164,7 @@ async def capture(db, uid, wid, member, scheduled_at):
                 metadata=envelope))
     from .mtf_signal_replay import record
     await record(db, uid, wid, payload, hc)
-    if not hc.enabled:
+    if not hc.enabled and not cfg.context_audit.enabled:
         return True
     oid = uuid4()
     await db.execute(text('''INSERT INTO mtf_history_observations

@@ -7,6 +7,16 @@
   },
   "required_features": [
     {
+      "id": "mtf-context-risk-audit",
+      "description": "Independent causal context and risk gates with fail-closed publication and immutable replay evidence.",
+      "files": [
+        {"path":"backend/app/services/mtf_risk_audit.py","contains_all":["MTF_CONTEXT_RISK_AUDIT", "def publication", "def structure"]},
+        {"path":"backend/app/services/mtf_chart_engine.py","contains_all":["finalize(result, frames, cfg, as_of"]},
+        {"path":"backend/tests/test_mtf_risk_audit.py","contains_all":["test_btc_not_exempt_and_score_cannot_compensate", "test_causal_prefix_and_disabled_identity"]},
+        {"path":"frontend/components/mtf/MTFSettingsDialog.tsx","contains_all":["context_audit.enabled", "Auditoria obrigatória de contexto e risco"]}
+      ]
+    },
+    {
       "id": "mtf-stop-sized-by-gross-rr",
       "description": "Optional stop sizing from a percentage target and gross RR, independent of RR veto and preserving frozen plans.",
       "files": [

@@ -70,7 +70,9 @@ def test_strict_profile_uses_requested_timeframe_without_flat_fallback():
         "indicators": {"rsi": 80},
         "_indicators_by_tf": {"1h": {"rsi": 20}},
     }
-    assert ProfileEngine(profile).evaluate_asset(asset)["passed_filter"] is True
+    # Explicit timeframe values already take precedence in both modes. The flat
+    # value must not override a contradictory value supplied for the requested TF.
+    assert ProfileEngine(profile).evaluate_asset(asset)["passed_filter"] is False
     assert (
         ProfileEngine(profile, strict_timeframe_mode=True)
         .evaluate_asset(asset)["passed_filter"]

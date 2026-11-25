@@ -36,6 +36,8 @@ export interface TriggerDiagnostics {
 }
 export interface StageTimeframes { structure: Timeframe; zone: Timeframe; trigger: Timeframe }
 export interface Analysis {
+  risk_audit?: {version:string; status:'PASS'|'BLOCK'|'PENDING'; checks:TriggerCheck[]; reasons:string[]};
+  signal_contract?: {signal_id:string; eligible:boolean; signal_status:string; confirmed_at:string|null; expires_at:string|null; config_hash:string; audit_version:string|null};
   stage_results?: {armed:boolean;trigger:boolean};
   stage_timeframes?: StageTimeframes;
   rules_diagnostics?: TriggerCheck[];
@@ -73,6 +75,7 @@ export interface RuleOperand { ref?:string; value?:number|string|boolean|number[
 export interface RuleCondition { id:string; label:string; enabled?:boolean; left:RuleOperand; operator:string; right:RuleOperand }
 export interface RuleGroup { logic:'AND'|'OR'; conditions:(RuleCondition|RuleGroup)[] }
 export interface MTFConfig {
+  context_audit?: {enabled:boolean; mode:'enforce'; allow_countertrend:false; require_structure_alignment:boolean; require_zone_alignment:boolean; require_structure_integrity:boolean; require_trigger_lh_break:boolean; require_stop_beyond_trigger_swing:boolean; require_stop_beyond_arming_zone:boolean; min_stop_atr_trigger:number; min_reference_rr_gross:number; require_positive_reference_reward_net:boolean};
   stop_sizing?: {enabled:boolean; target_pct:number; gross_rr:number};
   timeframes?: StageTimeframes | null;
   indicators?: Record<string,IndicatorInstance> | null;

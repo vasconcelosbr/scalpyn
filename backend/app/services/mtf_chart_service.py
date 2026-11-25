@@ -232,6 +232,8 @@ async def chart_data(db, user_id, symbol, profile_id, cfg, include_display=True)
     finalize_diagnostics(analysis, cfg, now, cutoff)
     from .mtf_entry_band import candidate_entry_band
     analysis['entry_candidate'] = candidate_entry_band(analysis, frames, cfg, now)
+    from .mtf_risk_audit import publication
+    publication(analysis, cfg, now)
     # MTF_PUMP_FLOW_SHADOW: additive frozen context, never passed to evaluate().
     from .mtf_pump_flow import load_context
     analysis['pump_flow'] = await load_context(db, user_id, symbol, analysis['candle_close_at_utc'] if analysis.get('candle_close_at_utc') else analysis['evaluated_at_utc'], cfg.pump_flow)

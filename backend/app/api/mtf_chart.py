@@ -130,6 +130,9 @@ async def watchlist(response: Response, watchlist_id: str, db: AsyncSession = De
             analysis['status'] = 'NO_TRADE'
             analysis['score']['total'] = 0
             analysis['vetoes'] = list(analysis['vetoes']) + ['EVALUATION_STALE' if stale else 'CONFIG_CHANGED']
+    from ..services.mtf_risk_audit import publication
+    for analysis in latest.values():
+        publication(analysis, cfg, now)
     return {"items": [{**item, "mtf": latest.get(item["symbol"])} for item in items[:cfg.max_assets_per_watchlist]],
             "total": len(items), "limited": len(items) > cfg.max_assets_per_watchlist,
             "monitored": watchlist_id in cfg.monitored_watchlists,
