@@ -8,6 +8,15 @@ from app.exchange_adapters.gate_adapter import GateAdapter
 from scripts.run_observation_beat import ALLOWED, M5_SHADOW_ALLOWED, observation_schedule
 
 
+def test_recovery_schedule_keeps_independent_replay_progress():
+    from app.tasks.celery_app import celery_app
+    selected = observation_schedule(celery_app.conf.beat_schedule, {})
+    replay = selected['mtf_replay_progress']
+    assert replay['task'] == 'app.tasks.mtf_chart.advance_replays'
+    assert replay['options']['queue'] == 'structural_compute'
+    assert 'execute_buy_cycle' not in selected
+
+
 def test_recovery_schedule_requires_explicit_shadow_opt_in_and_order_block():
     entries = {name: {'task': name} for name in (*ALLOWED, *M5_SHADOW_ALLOWED,
                                                'execute_buy_cycle', 'evaluate_signals', 'retrain')}
