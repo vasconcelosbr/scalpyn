@@ -259,6 +259,8 @@ async def chart_data_v3(db, uid, symbol, profile_id, cfg, include_display):
     )
     finalize_diagnostics(analysis, cfg, now, cutoff)
     analysis["entry_candidate"] = candidate_entry_band(analysis, frames, cfg, now)
+    from .mtf_risk_audit import publication
+    publication(analysis, cfg, now)
     data = {
         "symbol": symbol,
         "frames": frames,

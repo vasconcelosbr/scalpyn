@@ -138,6 +138,22 @@ def pump_flow_preset() -> dict:
     }).model_dump()
 
 
+class MTFContextAudit(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    enabled: StrictBool = False
+    mode: Literal['enforce'] = 'enforce'
+    allow_countertrend: Literal[False] = False
+    require_structure_alignment: StrictBool = True
+    require_zone_alignment: StrictBool = True
+    require_structure_integrity: StrictBool = True
+    require_trigger_lh_break: StrictBool = True
+    require_stop_beyond_trigger_swing: StrictBool = True
+    require_stop_beyond_arming_zone: StrictBool = True
+    min_stop_atr_trigger: float = Field(default=1.5, gt=0)
+    min_reference_rr_gross: float = Field(default=2, gt=0)
+    require_positive_reference_reward_net: StrictBool = True
+
+
 class MTFChartConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
     schema_version: Literal["mtf_chart_v1", "mtf_chart_v2", "mtf_chart_v3"]
@@ -181,6 +197,7 @@ class MTFChartConfig(BaseModel):
     rejection_lookback: int = Field(ge=1, le=20)
     stop_buffer_atr: float = Field(gt=0)
     stop_sizing: MTFStopSizing = Field(default_factory=MTFStopSizing)
+    context_audit: MTFContextAudit = Field(default_factory=MTFContextAudit)
     max_stop_atr: float = Field(gt=0)
     min_rr_net: float = Field(gt=0)
     rr_bonus_threshold: float = Field(gt=0)
@@ -277,6 +294,8 @@ class MTFChartConfig(BaseModel):
         # Disabled sizing preserves all legacy decision identities.
         if not self.stop_sizing.enabled:
             data.pop('stop_sizing', None)
+        if not self.context_audit.enabled:
+            data.pop('context_audit', None)
         if self.schema_version == 'mtf_chart_v3':
             data.pop('structure_ema_period', None)
             for instance in data['indicators'].values(): instance.pop('display', None)

@@ -219,6 +219,9 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
     if vetoes:
         result["explanation"] = ["SEM TRADE: candles fechados ou ATR indisponíveis/desatualizados."]
         result["trigger_diagnostics"] = build_diagnostics(result, frames, cfg, as_of, spread_pct, btc_trend)
+        if cfg.context_audit.enabled:
+            result['risk_audit'] = {'version': 'mtf_context_risk_v1', 'status': 'BLOCK', 'checks': [],
+                                    'reasons': list(vetoes), 'confirmed_at': as_of, 'preview': preview_at is not None}
         return result
     f4, f1, f5 = (frames[tf] for tf in (structure_tf, zone_tf, trigger_tf))
     c = f5["candles"][-1]
@@ -367,6 +370,8 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         diagnostic['checks'].extend(group_checks)
         diagnostic['checks'].extend({**row, 'role':'context'} for row in rule_checks)
         result['explanation'].insert(0, 'Regras JSON: ARMADO '+str(armed)+'; GATILHO '+str(confirmed)+'.')
+    from .mtf_risk_audit import finalize
+    finalize(result, frames, cfg, as_of, preview=preview_at is not None)
     return result
 
 

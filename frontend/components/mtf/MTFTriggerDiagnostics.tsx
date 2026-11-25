@@ -52,6 +52,7 @@ export function MTFTriggerDiagnostics({analysis, symbol, date, pending}: {
     <div className="mtf-card-title"><strong>O que falta para o GATILHO</strong></div>
     <div className="mtf-panel-body">
       <p className="mtf-diagnostic-symbol">{symbol.replace('_', '/')}{analysis && <span>{statusLabels[analysis.status]}</span>}</p>
+      {analysis?.risk_audit && <p role="status">{analysis.risk_audit.status === 'BLOCK' ? 'Gatilho bloqueado pela auditoria de contexto e risco.' : analysis.risk_audit.status === 'PASS' ? 'Auditoria de contexto e risco atendida.' : 'Auditoria aguardando plano confirmado.'} Score não compensa reprovações obrigatórias.</p>}
       {!analysis || !diagnostic || !coherent ? <p className="mtf-muted" role="status">{pending ?? (!analysis ? 'Aguardando avaliação confirmada deste ativo.' : 'Detalhamento indisponível nesta observação.')}</p> : <>
         <p className="mtf-muted">Candle fechado: {date(diagnostic.candle_close_at_utc)}<br/>Avaliação: {date(diagnostic.observed_at_utc)}</p>
         <p className="mtf-diagnostic-summary">{analysis.status === 'TRIGGERED' ? 'Condições do gatilho atendidas nesta avaliação.' : 'Condições a resolver na avaliação confirmada:'}</p>

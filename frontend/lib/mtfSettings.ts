@@ -20,6 +20,7 @@ export function settingsDraft(config: MTFConfig | null, boot: Bootstrap): MTFCon
   next.rejection_patterns ??= boot.preset.rejection_patterns;
   if (next.veto_filters == null && boot.preset.veto_filters != null) next.veto_filters = structuredClone(boot.preset.veto_filters);
   if (next.stop_sizing == null && boot.preset.stop_sizing != null) next.stop_sizing = structuredClone(boot.preset.stop_sizing);
+  if (next.context_audit == null && boot.preset.context_audit != null) next.context_audit = structuredClone(boot.preset.context_audit);
   return next;
 }
 

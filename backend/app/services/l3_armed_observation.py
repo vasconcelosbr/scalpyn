@@ -65,6 +65,14 @@ def reading(item, row, *, now, cfg, profile_hashes, indicator_identity):
         reasons.append('INVALID_MTF_STATUS')
     if not reasons:
         result.update(status=row['status'], data_state='current')
+    if cfg is not None:
+        from copy import deepcopy
+        from .mtf_risk_audit import publication
+        contract = publication(deepcopy(analysis), cfg, now.timestamp())['signal_contract']
+        if reasons:
+            contract['eligible'] = False
+        result['signal_contract'] = contract
+        result['risk_audit'] = analysis.get('risk_audit')
     return result
 
 
@@ -116,6 +124,9 @@ async def load_l3_armed_display(db, *, user_id, include_analysis=False):
     # readings remain data-pending and must never revive an older ARMED payload.
     analyses = {i['symbol']: latest[i['symbol']]['analysis'] for i in enriched
                 if i['mtf']['data_state'] == 'current'} if include_analysis else {}
+    for item in enriched:
+        if item['symbol'] in analyses:
+            analyses[item['symbol']] = {**analyses[item['symbol']], 'signal_contract': item['mtf'].get('signal_contract')}
     return {**result, 'items':enriched, 'armed_items':armed, 'armed_count':len(armed),
             **({'analyses': analyses} if include_analysis else {})}
 

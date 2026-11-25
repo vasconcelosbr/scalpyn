@@ -11,6 +11,18 @@ type Tab = 'flow' | 'armed' | 'trigger' | 'vetoes' | 'shared' | 'advanced';
 type FieldSpec = {path: string; label: string; hint: string; unit?: string; kind?: 'patterns' | 'boolean' | 'btc-timeframe'};
 const field = (path: string, label: string, hint: string, unit?: string): FieldSpec => ({path, label, hint, unit});
 const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] = [
+  {tab:'vetoes',title:'Auditoria obrigatória de contexto e risco',note:'Bloqueios independentes do score, confirmados somente no fechamento. Não há exceção de contratendência. O stop escolhido é validado, nunca alargado automaticamente. Alterações valem para novas avaliações.',fields:[
+    {path:'context_audit.enabled',label:'Ativar auditoria obrigatória',hint:'Sinais reprovados deixam de ser publicados como Gatilho.',kind:'boolean'},
+    {path:'context_audit.require_structure_alignment',label:'Exigir direção superior alinhada',hint:'Exige estrutura altista para LONG.',kind:'boolean'},
+    {path:'context_audit.require_zone_alignment',label:'Exigir direção tática alinhada',hint:'Suporte próximo não substitui tendência alinhada.',kind:'boolean'},
+    {path:'context_audit.require_structure_integrity',label:'Exigir estrutura íntegra',hint:'Fechamento além do pivô invalida a estrutura até nova formação confirmada.',kind:'boolean'},
+    {path:'context_audit.require_trigger_lh_break',label:'Exigir rompimento do LH operacional',hint:'Um engolfo deve fechar acima do último topo descendente, quando houver.',kind:'boolean'},
+    {path:'context_audit.require_stop_beyond_trigger_swing',label:'Stop além do fundo operacional',hint:'Exige stop abaixo do último fundo confirmado.',kind:'boolean'},
+    {path:'context_audit.require_stop_beyond_arming_zone',label:'Stop além da zona de suporte',hint:'Exige stop abaixo da borda inferior da zona que armou o sinal.',kind:'boolean'},
+    field('context_audit.min_stop_atr_trigger','Distância mínima do stop','Limiar experimental, sem garantia de resultado.','ATR operacional'),
+    field('context_audit.min_reference_rr_gross','RR bruto mínimo do alvo percentual','Usa o alvo de referência configurado em Stop pelo RR bruto.','R:R'),
+    {path:'context_audit.require_positive_reference_reward_net',label:'Exigir retorno líquido positivo',hint:'Desconta taxas e slippage do alvo percentual de referência.',kind:'boolean'},
+  ]},
   {tab:'flow',title:'Capital e fluxo · comparação Shadow',note:'Hipótese observacional. Não altera score, vetos, plano ou admissões. A comparação usa os mesmos resultados Shadow, separados pela confirmação registrada na entrada.',fields:[
     {path:'pump_flow.enabled',label:'Ativar contexto e comparação',hint:'Registra os dados nas próximas avaliações. Não reclassifica o histórico.',kind:'boolean'},
     field('pump_flow.min_coverage','Cobertura mínima','Fração mínima de minutos e símbolos disponíveis. Ausência não equivale a fluxo neutro.','fração'),
