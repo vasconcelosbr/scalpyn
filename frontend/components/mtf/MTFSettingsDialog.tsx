@@ -40,6 +40,11 @@ const sections: {tab: Tab; title: string; note?: string; fields: FieldSpec[]}[] 
     field('pump_flow.asset_min_delta','Delta normalizado mínimo','(Compra − venda) / (compra + venda), em USDT.','fração'),
     field('pump_flow.asset_min_buy_persistence','Persistência compradora mínima','Fração dos minutos disponíveis com compra maior que venda. Exige também o delta mínimo.','fração'),
   ]},
+  {tab:'flow',title:'Reavaliação do fluxo',note:'Avaliações gravadas antes de o Pump publicar o último minuto ficam congeladas. Uma única releitura posterior é registrada à parte, com os mesmos limiares, e aparece como coorte separada na comparação.',fields:[
+    {path:'pump_flow.revision.enabled',label:'Reavaliar fluxo indisponível',hint:'Só para ativos que estavam no universo Pump na captura. Não altera a avaliação original.',kind:'boolean'},
+    field('pump_flow.revision.delay_seconds','Espera após o fechamento','Tempo entre o fechamento do candle e a releitura. Deve ser menor que o atraso máximo da avaliação.','segundos'),
+    field('pump_flow.revision.batch_limit','Limite por ciclo','Máximo de avaliações relidas por usuário a cada minuto.','avaliações'),
+  ]},
   {tab:'armed', title:'Estrutura e aproximação', note:'ARMADO exige proximidade da zona e ausência dos vetos habilitados. Os filtros de direção ficam em Vetos. Força e rejeição contribuem para o score.', fields:[
     field('pivot_left','Pivô · candles à esquerda','Confirma a estrutura de tendência. Compartilhado entre os timeframes.','candles'),
     field('pivot_right','Pivô · candles à direita','Só confirma o pivô após os candles seguintes. Compartilhado.','candles'),

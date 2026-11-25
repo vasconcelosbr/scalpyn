@@ -1,5 +1,6 @@
 """MTF_PUMP_FLOW_SHADOW: frozen context, no score, veto, plan or order mutation."""
 from datetime import datetime, timedelta, timezone
+import json
 import logging
 from math import isfinite
 from sqlalchemy import text
@@ -71,7 +72,7 @@ def summarize(rows, minutes, cutoff, known_at, min_coverage, *, capital=False):
 
 
 def build_context(capital_rows, asset_rows, *, symbol, monitored_symbols, cutoff, known_at, cfg):
-    config = cfg.model_dump()
+    config = cfg.identity_dump()
     out = {'version': 'mtf_pump_flow_v1', 'config_hash': canonical_hash(config), 'config': config,
            'captured_at': known_at.isoformat(), 'cutoff': cutoff.isoformat(), 'symbol': symbol,
            'mode': 'SHADOW', 'operational_effect': False, 'capital': {}, 'asset': {},
@@ -105,13 +106,26 @@ def build_context(capital_rows, asset_rows, *, symbol, monitored_symbols, cutoff
     return out
 
 
+async def read_rows(db, user_id, symbol, cutoff, known_at, cfg):
+    """Capital and asset minutes visible at ``known_at``, under the configured timeout."""
+    previous_timeout = await db.scalar(text('SHOW statement_timeout'))
+    async with db.begin_nested():
+        await db.execute(text("SELECT set_config('statement_timeout', :timeout, true)"), {'timeout': str(cfg.query_timeout_ms)})
+        capitals = (await db.execute(text(CAPITAL_SQL), {'uid':user_id,'lo':cutoff-timedelta(minutes=max(WINDOWS[tf] for tf in cfg.capital_neutral_ratio)),
+                    'cutoff':cutoff,'known_at':known_at})).mappings().all()
+        assets = (await db.execute(text(ASSET_SQL), {'symbol':symbol,'lo':cutoff-timedelta(minutes=WINDOWS[cfg.asset_window]),
+                  'cutoff':cutoff,'known_at':known_at})).mappings().all()
+        await db.execute(text("SELECT set_config('statement_timeout', :timeout, true)"), {'timeout': previous_timeout})
+    return capitals, assets
+
+
 async def load_context(db, user_id, symbol, cutoff, cfg):
     if cfg is None or not cfg.enabled:
         return {'confirmation': 'disabled', 'capital': {}, 'asset': {}, 'operational_effect': False}
     known_at = datetime.now(timezone.utc)
     cutoff = utc(cutoff)
-    unavailable = {'version': 'mtf_pump_flow_v1', 'config_hash': canonical_hash(cfg.model_dump()),
-                   'config': cfg.model_dump(), 'captured_at': known_at.isoformat(), 'cutoff': cutoff.isoformat(),
+    unavailable = {'version': 'mtf_pump_flow_v1', 'config_hash': canonical_hash(cfg.identity_dump()),
+                   'config': cfg.identity_dump(), 'captured_at': known_at.isoformat(), 'cutoff': cutoff.isoformat(),
                    'confirmation': 'unavailable', 'capital': {}, 'asset': {}, 'operational_effect': False}
     try:
         from . import pump_monitor_service as pump
@@ -119,14 +133,7 @@ async def load_context(db, user_id, symbol, cutoff, cfg):
         envelope = await pump._read_json(await pump._redis(), pump._LATEST_KEY.format(user_id=user_id))
         if not envelope or not 0 <= (known_at-utc(envelope['generated_at'])).total_seconds() <= cfg.max_source_age_seconds:
             return {**unavailable, 'reasons': ['pump_snapshot_stale_or_missing']}
-        previous_timeout = await db.scalar(text('SHOW statement_timeout'))
-        async with db.begin_nested():
-            await db.execute(text("SELECT set_config('statement_timeout', :timeout, true)"), {'timeout': str(cfg.query_timeout_ms)})
-            capitals = (await db.execute(text(CAPITAL_SQL), {'uid':user_id,'lo':cutoff-timedelta(minutes=max(WINDOWS[tf] for tf in cfg.capital_neutral_ratio)),
-                        'cutoff':cutoff,'known_at':known_at})).mappings().all()
-            assets = (await db.execute(text(ASSET_SQL), {'symbol':symbol,'lo':cutoff-timedelta(minutes=WINDOWS[cfg.asset_window]),
-                      'cutoff':cutoff,'known_at':known_at})).mappings().all()
-            await db.execute(text("SELECT set_config('statement_timeout', :timeout, true)"), {'timeout': previous_timeout})
+        capitals, assets = await read_rows(db, user_id, symbol, cutoff, known_at, cfg)
         result = build_context(capitals, assets, symbol=symbol, monitored_symbols={r['symbol'] for r in envelope.get('rows',[])},
                                cutoff=cutoff, known_at=known_at, cfg=cfg)
         result['pump_generated_at'] = envelope['generated_at']
@@ -138,8 +145,9 @@ async def load_context(db, user_id, symbol, cutoff, cfg):
 
 
 REPORT_SQL = '''WITH final AS (
-    SELECT DISTINCT ON (e.id) e.id,e.payload,e.config_snapshot,s.state
+    SELECT DISTINCT ON (e.id) e.id,e.payload,e.config_snapshot,s.state,r.confirmation AS revised
     FROM mtf_chart_evaluations e JOIN mtf_chart_shadow_events s ON s.evaluation_id=e.id
+    LEFT JOIN mtf_pump_flow_revisions r ON r.evaluation_id=e.id
     WHERE e.user_id=:uid AND e.watchlist_id=:wid
       AND e.payload->'pump_flow'->'config'->>'enabled'='true'
     ORDER BY e.id,s.id DESC
@@ -147,6 +155,9 @@ REPORT_SQL = '''WITH final AS (
     SELECT *, 'baseline'::text AS cohort FROM final
     UNION ALL
     SELECT *, COALESCE(payload->'pump_flow'->>'confirmation','unavailable') AS cohort FROM final
+    UNION ALL
+    -- Deferred re-reading of evaluations unavailable at capture: a subset, never a replacement.
+    SELECT *, 'revised_'||revised AS cohort FROM final WHERE revised IS NOT NULL
 )
 SELECT payload->'pump_flow'->>'config_hash' AS flow_config_hash,
        payload->>'config_hash' AS mtf_config_hash, cohort,
@@ -164,3 +175,114 @@ async def comparison_report(db, uid, wid, cfg):
             'method': 'Same unchanged MTF Shadow fills; confirmed is a subset of baseline, not an independent portfolio. Frozen entry context. Missing flow stays separate. No causal or significance claim.',
             'status': 'collecting' if not rows else 'descriptive',
             'minimum_sample': cfg.min_report_sample}
+
+
+# ── MTF_PUMP_FLOW_REVISION: deferred, immutable re-reading ───────────────────
+# An evaluation frozen before the Pump cycle published its last closed minute keeps
+# its original context untouched; one later reading is stored apart, with provenance.
+
+REVISION_CANDIDATES_SQL = '''SELECT e.id, e.symbol, e.payload->'pump_flow' AS flow
+    FROM mtf_chart_evaluations e
+    WHERE e.user_id=:uid AND e.observed_at>=:since
+      AND e.payload->'pump_flow'->>'confirmation'='unavailable'
+      AND e.payload->'pump_flow'->'asset'->'window_minutes' IS NOT NULL
+      AND (e.payload->'pump_flow'->>'cutoff')::timestamptz<=:due
+      AND NOT EXISTS (SELECT 1 FROM mtf_pump_flow_revisions r WHERE r.evaluation_id=e.id)
+    ORDER BY e.observed_at LIMIT :limit'''
+
+REVISION_INSERT_SQL = '''INSERT INTO mtf_pump_flow_revisions
+    (evaluation_id, user_id, symbol, cutoff, original_captured_at, revised_at, delay_seconds,
+     original_confirmation, confirmation, config_hash, context)
+    VALUES (:eid, :uid, :symbol, :cutoff, :original_captured_at, :revised_at, :delay_seconds,
+     :original_confirmation, :confirmation, :config_hash, CAST(:context AS jsonb))
+    ON CONFLICT (evaluation_id) DO NOTHING RETURNING evaluation_id'''
+
+
+def revisable(flow):
+    """Only evaluations whose flow was actually read at capture: the symbol was in the
+    Pump universe then (membership is never re-derived later) and windows were summarized."""
+    flow = flow or {}
+    return (flow.get('confirmation') == 'unavailable' and 'window_minutes' in (flow.get('asset') or {})
+            and bool(flow.get('cutoff')) and isinstance(flow.get('config'), dict))
+
+
+def revise(capital_rows, asset_rows, *, flow, symbol, known_at):
+    """Same thresholds as the original evaluation; only the reading time differs."""
+    from ..schemas.mtf_chart import MTFPumpFlowConfig
+    cfg = MTFPumpFlowConfig.model_validate(flow['config'])
+    cutoff = utc(flow['cutoff'])
+    context = build_context(capital_rows, asset_rows, symbol=symbol, monitored_symbols={symbol},
+                            cutoff=cutoff, known_at=known_at, cfg=cfg)
+    context['revision_of'] = {
+        'original_confirmation': flow.get('confirmation'),
+        'original_captured_at': flow.get('captured_at'),
+        'original_reasons': flow.get('reasons') or [],
+        'original_asset_reason': (flow.get('asset') or {}).get('reason'),
+        'delay_seconds': (known_at-cutoff).total_seconds(),
+    }
+    return context
+
+
+async def revise_due(db, user_id, flow_cfg, now, clock=None):
+    """Revise this user's due evaluations once each. Returns how many were written."""
+    from ..schemas.mtf_chart import MTFPumpFlowConfig
+    rev = flow_cfg.revision if flow_cfg else None
+    if flow_cfg is None or not flow_cfg.enabled or rev is None or not rev.enabled:
+        return 0
+    clock = clock or (lambda: datetime.now(timezone.utc))
+    rows = (await db.execute(text(REVISION_CANDIDATES_SQL), {
+        'uid': user_id, 'since': now-timedelta(seconds=flow_cfg.max_evaluation_delay_seconds),
+        'due': now-timedelta(seconds=rev.delay_seconds), 'limit': rev.batch_limit})).mappings().all()
+    written = 0
+    for row in rows:
+        flow = row['flow']
+        if not revisable(flow):
+            continue
+        # One bad evaluation never blocks the batch (no poison pill): its savepoint is
+        # rolled back and it ages out of the freshness window on its own.
+        try:
+            async with db.begin_nested():
+                written += await _revise_one(db, user_id, row, flow, rev, clock, MTFPumpFlowConfig)
+        except Exception:
+            log.exception('MTF Pump flow revision skipped evaluation=%s', row['id'])
+    return written
+
+
+async def _revise_one(db, user_id, row, flow, rev, clock, config_type):
+    original_cfg = config_type.model_validate(flow['config'])
+    cutoff = utc(flow['cutoff'])
+    known_at = clock()
+    age = (known_at-cutoff).total_seconds()
+    # Past the original freshness limit a reading would only restate that failure.
+    if age < rev.delay_seconds or age > original_cfg.max_evaluation_delay_seconds:
+        return 0
+    capitals, assets = await read_rows(db, user_id, row['symbol'], cutoff, known_at, original_cfg)
+    context = revise(capitals, assets, flow=flow, symbol=row['symbol'], known_at=known_at)
+    captured = flow.get('captured_at')
+    created = await db.scalar(text(REVISION_INSERT_SQL), {
+        'eid': row['id'], 'uid': user_id, 'symbol': row['symbol'], 'cutoff': cutoff,
+        'original_captured_at': utc(captured) if captured else None, 'revised_at': known_at,
+        'delay_seconds': int(age), 'original_confirmation': flow.get('confirmation'),
+        'confirmation': context['confirmation'], 'config_hash': context['config_hash'],
+        'context': json.dumps(context, default=str, allow_nan=False)})
+    return 1 if created else 0
+
+
+async def revise_all(db):
+    """Every active MTF user, isolated per user: one failure never blocks the others."""
+    from sqlalchemy import select
+    from ..models.config_profile import ConfigProfile
+    from .mtf_chart_service import load_config
+    users = (await db.execute(select(ConfigProfile.user_id).where(
+        ConfigProfile.config_type == 'mtf_analysis', ConfigProfile.is_active.is_(True),
+        ConfigProfile.pool_id.is_(None)))).scalars().all()
+    total = 0
+    for user_id in users:
+        try:
+            cfg = await load_config(db, user_id)
+            total += await revise_due(db, user_id, cfg.pump_flow, datetime.now(timezone.utc))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            log.exception('MTF Pump flow revision failed user=%s', user_id)
+    return total
