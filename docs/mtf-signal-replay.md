@@ -52,6 +52,13 @@ marcadores ARMED/TRIGGERED/TARGET/STOP e comparação dos indicadores com o iní
 O gráfico usa contexto anterior do timeframe do gatilho e trajetória posterior
 em um minuto. Valores futuros não são revelados no quadro de indicadores.
 
+O bootstrap histórico percorre os estados em memória, gravando somente as novas
+ativações e o cursor final. Não atualiza o cursor no banco a cada observação antiga.
+O avanço roda em app.tasks.mtf_chart.advance_replays, na fila structural_compute,
+separado da fila de captura histórica. Snapshots posteriores não duplicam os
+candles de warmup da decisão e são ignorados quando o fechamento já foi gravado.
+Replays históricos encerrados não recebem indicadores atuais após seu resultado.
+
 - GET /api/mtf/replays: lista paginada por usuário, filtros de data/ativo/watchlist/resultado.
 - GET /api/mtf/replays/{id}: evidência imutável e progresso.
 - GET /api/mtf/replays/{id}/trajectory: candles e snapshots paginados por cursor.

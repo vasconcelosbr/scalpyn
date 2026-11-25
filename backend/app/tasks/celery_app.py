@@ -259,6 +259,7 @@ TASK_ROUTES = {
     "app.tasks.compute_mtf_indicators.compute_15m":      {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.compute_mtf_indicators.compute_1h":       {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.mtf_chart.observe":                       {"queue": QUEUE_STRUCTURAL_COMPUTE},
+    "app.tasks.mtf_chart.advance_replays":                {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.compute_scores.score":                    {"queue": QUEUE_STRUCTURAL_COMPUTE},
     "app.tasks.crypto_ev_score.compute":                 {"queue": QUEUE_STRUCTURAL},
     # pipeline_scan.scan: structural per operator spec (cadence-locked
@@ -822,6 +823,11 @@ celery_app.conf.update(
 
 # Periodic task schedule
 celery_app.conf.beat_schedule = {
+    "mtf_replay_progress": {
+        "task": "app.tasks.mtf_chart.advance_replays",
+        "schedule": 60.0,
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE, "expires": 55},
+    },
     "mtf_history_after_close": {
         "task": "app.tasks.mtf_history.dispatch",
         "schedule": crontab(minute="*"),

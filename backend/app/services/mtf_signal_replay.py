@@ -84,13 +84,36 @@ async def record(db, uid, wid, payload, hc, *, reconstruct=False):
             FROM ordered WHERE status!='TRIGGERED' OR previous_status IS DISTINCT FROM status
             ORDER BY observed_at,id'''),
             dict(uid=uid,wid=wid,symbol=symbol,profile=str(profile) if profile else None,at=utc(payload['observed_at'])))).scalars().all()
+        pending = []
         for historical in history:
-            if historical.get('replay_inputs') and historical.get('candle_close_price'):
-                await record(db, uid, wid, historical, hc, reconstruct=True)
-        previous = (await db.execute(text('SELECT * FROM mtf_replay_contexts WHERE identity=:key'), {'key': key})).mappings().first()
+            ha = historical['analysis']
+            hat = utc(ha.get('candle_close_at_utc'))
+            if not hat or hat > at or not ha.get('candle_closed_5m') or not historical.get('candle_close_price'):
+                continue
+            if any(str(v).startswith(('DATA_', 'EVALUATION_STALE', 'CONFIG_CHANGED')) for v in ha.get('vetoes', [])):
+                continue
+            move, opens = activation(previous, ha['status'], hat)
+            if not move:
+                continue
+            armed = armed_for(previous, historical, hat)
+            if opens:
+                pending.append((historical, hat, armed, bool(previous)))
+            previous = dict(candle_at=hat, status=ha['status'], armed=armed)
+        if previous:
+            await save_context(db, key, uid, wid, symbol, profile, previous)
+            for historical, hat, armed, had_previous in pending:
+                await save_signal(db, key, uid, wid, historical, hc, hat, armed, had_previous, True)
     advance, new = activation(previous, a['status'], at)
     if not advance:
         return
+    armed = armed_for(previous, payload, at)
+    await save_context(db, key, uid, wid, symbol, profile, dict(candle_at=at,status=a['status'],armed=armed))
+    if new:
+        await save_signal(db, key, uid, wid, payload, hc, at, armed, bool(previous), reconstruct)
+
+
+def armed_for(previous, payload, at):
+    a = payload['analysis']
     armed = list(previous['armed']) if previous else []
     if a['status'] == 'ARMED':
         if previous and previous['status'] == 'TRIGGERED':
@@ -99,13 +122,20 @@ async def record(db, uid, wid, payload, hc, *, reconstruct=False):
                           captured_at=payload['observed_at'], analysis=a))
     elif a['status'] not in ('TRIGGERED', 'ARMED'):
         armed = []
+    return armed
+
+
+async def save_context(db, key, uid, wid, symbol, profile, state):
     await db.execute(text('''INSERT INTO mtf_replay_contexts(identity,user_id,watchlist_id,symbol,profile_id,candle_at,status,armed)
         VALUES(:key,:uid,:wid,:symbol,:profile,:at,:status,CAST(:armed AS jsonb))
         ON CONFLICT(identity) DO UPDATE SET candle_at=excluded.candle_at,status=excluded.status,armed=excluded.armed'''),
         dict(key=key, uid=uid, wid=wid, symbol=symbol, profile=str(profile) if profile else None,
-             at=at, status=a['status'], armed=serial(armed)))
-    if not new:
-        return
+             at=state['candle_at'], status=state['status'], armed=serial(state['armed'])))
+
+
+async def save_signal(db, key, uid, wid, payload, hc, at, armed, had_previous, reconstruct):
+    a = payload['analysis']
+    symbol, profile = a['symbol'], a.get('profile_id')
     base = payload.get('candle_close_price')
     if not isinstance(base, (float, int)) or not math.isfinite(base) or base <= 0:
         raise ValueError('REPLAY_TRIGGER_CLOSE_MISSING')  # rollback the latch; retry can capture
@@ -114,7 +144,7 @@ async def record(db, uid, wid, payload, hc, *, reconstruct=False):
     rid = uuid4()
     payload = dict(payload, replay_target_pct=hc.replay_target_pct,
                    capture_kind='reconstructed_from_frozen_observations' if reconstruct else 'prospective',
-                   activation_boundary='observed_transition' if previous else 'first_observation',
+                   activation_boundary='observed_transition' if had_previous else 'first_observation',
                    operational_effect=False)
     await db.execute(text('''INSERT INTO mtf_signal_replays
         (id,context_id,user_id,watchlist_id,symbol,profile_id,triggered_at,captured_at,baseline,target,stop,snapshot,armed)
@@ -138,6 +168,10 @@ async def store_payload(db, rid, p):
     # Identity describes the set of closed candles, not the wall clock or ticker.
     identity = canonical_hash(dict(frames={tf: f.get('last_closed_candle') for tf, f in p['frames'].items()},
                                    producers=sorted({i.get('producer', '') for i in p['indicators']})))
+    if await db.scalar(text('SELECT 1 FROM mtf_replay_snapshots WHERE replay_id=:id AND identity=:key'),
+                       {'id': rid, 'key': identity}):
+        return
+    p = {k: v for k, v in p.items() if k != 'replay_inputs'}
     await db.execute(text('''INSERT INTO mtf_replay_snapshots(replay_id,identity,captured_at,payload)
         VALUES(:id,:key,:at,CAST(:payload AS jsonb)) ON CONFLICT DO NOTHING'''),
         dict(id=rid, key=identity, at=utc(p['observed_at']), payload=serial(p)))
@@ -193,10 +227,11 @@ async def advance_all(db, batch_size=50):
             async with db.begin_nested():
                 await advance_one(db, row)
             # Capture actual available closed indicators, not a reconstruction at an old clock.
-            async with db.begin_nested():
-                cfg = MTFChartConfig.model_validate(row['snapshot']['engine_config'])
-                data = await chart_data(db, row['user_id'], row['symbol'], row['profile_id'], cfg, include_display=False)
-                await store_followup(db, row, data)
+            if await db.scalar(text("SELECT status='OPEN' FROM mtf_replay_progress WHERE replay_id=:id"), {'id': row['id']}):
+                async with db.begin_nested():
+                    cfg = MTFChartConfig.model_validate(row['snapshot']['engine_config'])
+                    data = await chart_data(db, row['user_id'], row['symbol'], row['profile_id'], cfg, include_display=False)
+                    await store_followup(db, row, data)
         except Exception:
             log.exception('MTF replay advance failed id=%s', row['id'])
             await db.execute(text("UPDATE mtf_replay_progress SET checked_at=now(),issue='CAPTURE_ERROR' WHERE replay_id=:id"), {'id': row['id']})
