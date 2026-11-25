@@ -10,7 +10,7 @@ from app.services.profile_runtime_config import canonical_hash
 
 def test_presentation_does_not_change_v1_identity_and_v2_requires_explicit_window():
     raw=experimental_preset()
-    legacy={k:v for k,v in raw.items() if k not in {'pump_flow','presentation','zone_lookback_candles','atr_period','force_patterns','rejection_patterns','veto_filters','btc_trend_timeframe','timeframes','indicators','rules','zone_algorithm','structure_ema_period','frame_atr'}}
+    legacy={k:v for k,v in raw.items() if k not in {'stop_sizing','pump_flow','presentation','zone_lookback_candles','atr_period','force_patterns','rejection_patterns','veto_filters','btc_trend_timeframe','timeframes','indicators','rules','zone_algorithm','structure_ema_period','frame_atr'}}
     cfg=MTFChartConfig.model_validate(raw)
     assert canonical_hash(cfg.engine_dump())==canonical_hash(legacy)
     raw['presentation']=presentation_preset()
