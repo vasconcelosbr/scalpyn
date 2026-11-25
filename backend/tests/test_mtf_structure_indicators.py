@@ -132,6 +132,7 @@ async def test_old_observation_without_ema_passes_l3_validation_and_projection(m
 
 @pytest.mark.asyncio
 async def test_capture_persists_structural_ema_for_profile_without_ema(monkeypatch):
+    monkeypatch.setattr('app.services.mtf_signal_replay.record', AsyncMock())
     cfg,data = sample()
     before = deepcopy(data['analysis'])
     db = SimpleNamespace(scalar=AsyncMock(side_effect=[True,None]), commit=AsyncMock(),

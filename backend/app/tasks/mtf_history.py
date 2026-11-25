@@ -94,8 +94,8 @@ def maintenance():
         from ..services.mtf_signal_replay import advance_all
         async with CeleryAsyncSessionLocal() as db:
             await dispatch_pending(db)
+            replays = await advance_all(db)
             results = await advance_outcomes(db)
             exports = await process_pending(db)
-            replays = await advance_all(db)
             return {'outcomes':results,'exports':exports,'replays':replays,'operational_effect':False}
     return _run_async(run())
