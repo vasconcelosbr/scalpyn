@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 class HistoryConfig(BaseModel):
     enabled: bool = True
+    replay_target_pct: float = Field(default=1, gt=0, le=100, allow_inf_nan=False)
     horizons_minutes: list[int] = Field(default_factory=lambda: [15, 60, 240, 1440], min_length=1, max_length=24)
 
     @field_validator('horizons_minutes')

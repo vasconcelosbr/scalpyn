@@ -104,7 +104,7 @@ async def capture(db, uid, wid, member, scheduled_at):
     uid = UUID(str(uid))
     hc = HistoryConfig.model_validate(await config_service.get_config(db, 'mtf_history', uid) or {})
     cfg = await chart.load_config(db, uid)
-    if not hc.enabled or not cfg.enabled or wid not in cfg.monitored_watchlists:
+    if not cfg.enabled or wid not in cfg.monitored_watchlists:
         return False
     identity = canonical_hash(dict(user=str(uid), watchlist=wid, symbol=member['symbol'],
                                   profile=str(member.get('profile_id')), scheduled_at=scheduled_at))
@@ -162,6 +162,10 @@ async def capture(db, uid, wid, member, scheduled_at):
                 producer=row['scheduler_group'],source_at=source_at,computed_at=row['time'].isoformat(),
                 role='context_only',quality=quality,age_seconds=age,producer_status=envelope.get('status'),value=envelope.get('value'),
                 metadata=envelope))
+    from .mtf_signal_replay import record
+    await record(db, uid, wid, payload, hc)
+    if not hc.enabled:
+        return True
     oid = uuid4()
     await db.execute(text('''INSERT INTO mtf_history_observations
         (id,user_id,watchlist_id,symbol,profile_id,identity,observed_at,status,trend,quality,payload)

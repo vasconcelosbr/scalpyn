@@ -18,7 +18,6 @@ async def dispatch_async():
     from ..services.mtf_chart_service import load_config
     count = 0
     now = int(datetime.now(timezone.utc).timestamp())
-    scheduled = datetime.fromtimestamp(now-now%300,timezone.utc).isoformat()
     async with CeleryAsyncSessionLocal() as db:
         users = (await db.execute(select(ConfigProfile.user_id).where(
             ConfigProfile.config_type=='mtf_analysis', ConfigProfile.pool_id.is_(None),
@@ -26,8 +25,11 @@ async def dispatch_async():
         for uid in set(users):
             cfg = await load_config(db,uid)
             hc = await history.config_service.get_config(db,'mtf_history',uid)
-            if not cfg.enabled or hc.get('enabled') is False:
+            if not cfg.enabled:
                 continue
+            from ..services.mtf_chart_engine import TF_SECONDS
+            interval = min(TF_SECONDS[tf] for tf in cfg.active_timeframes())
+            scheduled = datetime.fromtimestamp(now-now%interval,timezone.utc).isoformat()
             for wid in cfg.monitored_watchlists:
                 for item in await history.history_members(db,uid,wid):
                     import json
@@ -89,9 +91,11 @@ def maintenance():
         from ..database import CeleryAsyncSessionLocal
         from ..services.mtf_history import advance_outcomes
         from ..services.mtf_history_export import process_pending
+        from ..services.mtf_signal_replay import advance_all
         async with CeleryAsyncSessionLocal() as db:
             await dispatch_pending(db)
             results = await advance_outcomes(db)
             exports = await process_pending(db)
-            return {'outcomes':results,'exports':exports,'operational_effect':False}
+            replays = await advance_all(db)
+            return {'outcomes':results,'exports':exports,'replays':replays,'operational_effect':False}
     return _run_async(run())

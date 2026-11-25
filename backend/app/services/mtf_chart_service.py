@@ -350,6 +350,8 @@ async def persist_evaluation(db, user_id, watchlist_id, data, cfg):
     payload = dict(data["analysis"])
     if not payload.get("candle_closed_5m"):
         return False
+    from .mtf_signal_replay import record_data
+    await record_data(db, user_id, watchlist_id, data, cfg)
     identity = canonical_hash({k: payload.get(k) for k in (
         "symbol", "profile_id", "profile_hash", "config_hash", "engine_version", "candle_closed_5m")}|{
         "user_id": str(user_id), "watchlist_id": watchlist_id, "indicator_identity": payload["indicator_identity"]})

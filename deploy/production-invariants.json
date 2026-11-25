@@ -7,6 +7,15 @@
   },
   "required_features": [
     {
+      "id": "mtf-independent-signal-replay",
+      "description": "Confirmed signal activations are recorded independently of Shadow admission, with immutable evidence and chronological outcomes.",
+      "files": [
+        {"path": "backend/app/services/mtf_signal_replay.py", "contains_all": ["async def record", "BOTH_BARRIERS_IN_ONE_MINUTE", "CANDLE_GAP"]},
+        {"path": "backend/tests/test_mtf_signal_replay.py", "contains_all": ["test_independent_signals_idempotence_and_owner_scoping", "test_restart_gap_then_target_and_immutable_candles"]},
+        {"path": "frontend/app/grafico-mtf/replays/page.tsx", "contains_all": ["Replay de gatilhos", "Próximo candle"]}
+      ]
+    },
+    {
       "id": "recovery-edits-independent-of-orders",
       "description": "App edits are unlocked by default while observation mode still blocks exchange writes.",
       "files": [

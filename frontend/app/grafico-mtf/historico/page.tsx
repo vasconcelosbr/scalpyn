@@ -95,7 +95,7 @@ export default function ObservationHistory(){
   }
 
   return <main className="observation-history">
-    <header><div><Link href="/grafico-mtf">← Gráfico MTF</Link><h1>Histórico de observações</h1><p>O que foi observado, quando e com quais dados.</p></div><span className="history-mode">Somente observação · ordens bloqueadas</span></header>
+    <header><div><Link href="/grafico-mtf">← Gráfico MTF</Link><Link href="/grafico-mtf/replays">Replay de gatilhos ↗</Link><h1>Histórico de observações</h1><p>O que foi observado, quando e com quais dados.</p></div><span className="history-mode">Somente observação · ordens bloqueadas</span></header>
     <section className="history-intro"><p>Captura automática das watchlists monitoradas no MTF, mesmo com esta página fechada. Todos os estados são registrados. O histórico permanece após a saída do ativo.</p><p>Preço observado e fechamento do candle são distintos. Resultados futuros são descritivos, usam candles posteriores à observação e não representam operações executadas. Avaliações antigas sem captura completa continuam no histórico legado.</p></section>
     <form className="history-filters" onSubmit={e=>{e.preventDefault();setPage(null);setApplied({...filters,start:filters.start?new Date(filters.start+'Z').toISOString():'',end:filters.end?new Date(filters.end+'Z').toISOString():''});}}>
       <label>Watchlist<select value={filters.watchlist_id} onChange={e=>setFilters({...filters,watchlist_id:e.target.value})}><option value="">Todas</option>{boot?.watchlists.map(w=><option key={w.id} value={w.id}>{w.name}</option>)}</select></label>

@@ -37,7 +37,9 @@ async def settings(db=Depends(get_db),uid=Depends(get_current_user_id)):
 
 @router.put('/settings')
 async def update_settings(payload:HistoryConfig,db=Depends(get_db),uid=Depends(get_current_user_id)):
-    return await service.config_service.update_config(db,'mtf_history',uid,payload.model_dump(),uid,
+    current = await service.config_service.get_config(db,'mtf_history',uid) or {}
+    merged = HistoryConfig.model_validate({**current, **payload.model_dump(exclude_unset=True)})
+    return await service.config_service.update_config(db,'mtf_history',uid,merged.model_dump(),uid,
         change_description='Histórico MTF: captura e horizontes analíticos, sem efeito operacional')
 
 
