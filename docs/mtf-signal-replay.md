@@ -62,6 +62,14 @@ Replays históricos encerrados não recebem indicadores atuais após seu resulta
 - GET /api/mtf/replays: lista paginada por usuário, filtros de data/ativo/watchlist/resultado.
 - GET /api/mtf/replays/{id}: evidência imutável e progresso.
 - GET /api/mtf/replays/{id}/trajectory: candles e snapshots paginados por cursor.
+- GET /api/mtf/replays/{id}/export: download JSON completo, restrito ao proprietário.
+  Um único snapshot transacional inclui registro original, progresso/resultado,
+  todos os candles e snapshots persistidos (sem paginação), e observações históricas
+  originais usadas na reconstrução até o cursor de progresso. Preserva indicadores,
+  configurações, inputs, marcações ARMADO, horários e qualidade dos dados.
+  O schema `mtf_signal_replay_export_v1` informa horário da exportação e semântica;
+  replays abertos representam os dados disponíveis nesse instante. O botão
+  “Baixar JSON completo” independe da posição do player e dos dados em cache na tela.
 - PUT /api/mtf/observations/settings: replay_target_pct, preservando campos omitidos.
 
 Leituras dependem do proprietário, não da permanência do ativo na watchlist.

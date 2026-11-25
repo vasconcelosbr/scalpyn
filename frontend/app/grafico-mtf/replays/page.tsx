@@ -51,6 +51,7 @@ export default function SignalReplays(){
   const [watchlists,setWatchlists]=useState<{id:string;name:string}[]>([]),[target,setTarget]=useState(''),[settings,setSettings]=useState<Record<string,unknown>>({}),[notice,setNotice]=useState('');
   const [profiles,setProfiles]=useState<{id:string;name:string}[]>([]);
   const [selectedId,setSelectedId]=useState<string|null>(null);
+  const [exporting,setExporting]=useState(false),[exportError,setExportError]=useState('');
   const loaded=useRef<{id:string;trajectory:Trajectory}|null>(null);
   useEffect(()=>{const controller=new AbortController();Promise.all([apiFetch<{watchlists:{id:string;name:string}[];profiles:{id:string;name:string}[]}>('/mtf/bootstrap',{signal:controller.signal}),apiFetch<Record<string,unknown>>('/mtf/observations/settings',{signal:controller.signal})]).then(([b,s])=>{setWatchlists(b.watchlists);setProfiles(b.profiles);setSettings(s);setTarget(String(s.replay_target_pct));}).catch(e=>{if(!controller.signal.aborted)setError(e.message);});return()=>controller.abort();},[]);
   useEffect(()=>{const t=setInterval(()=>setTick(v=>v+1),15000);return()=>clearInterval(t);},[]);
@@ -65,6 +66,19 @@ export default function SignalReplays(){
   })().catch(e=>{if(!c.signal.aborted)setError(e.message);}).finally(()=>{if(!c.signal.aborted)setLoading(false);});return()=>c.abort();},[selectedId,tick]);
   useEffect(()=>{if(!playing)return;const id=setInterval(()=>setIndex(n=>{if(n>=trajectory.candles.length){setPlaying(false);return n;}return n+1;}),1000/speed);return()=>clearInterval(id);},[playing,speed,trajectory.candles.length]);
   async function saveTarget(){try{const saved=await apiFetch<Record<string,unknown>>('/mtf/observations/settings',{method:'PUT',body:JSON.stringify({...settings,replay_target_pct:Number(target)})});setSettings(saved);setNotice('Alvo salvo para novas ativações. Replays existentes preservados.');}catch(e){setError(e instanceof Error?e.message:String(e));}}
+  async function downloadReplay(){
+    if(!selected||exporting)return;
+    const replay=selected;
+    setExporting(true);setExportError('');
+    try{
+      const blob=await apiFetch<Blob>(`/mtf/replays/${replay.id}/export`,{},'blob');
+      const url=URL.createObjectURL(blob),link=document.createElement('a');
+      link.href=url;link.download=`mtf-replay-${replay.symbol.replace(/[^A-Za-z0-9_-]/g,'_')}-${replay.id}.json`;
+      document.body.appendChild(link);link.click();link.remove();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    }catch(e){setExportError(e instanceof Error?e.message:String(e));}
+    finally{setExporting(false);}
+  }
   const shown=useMemo(()=>trajectory.candles.slice(0,index),[trajectory.candles,index]);
   const at=shown.length?time(shown.at(-1)!.time)+60:selected?time(selected.triggered_at):0;
   const tf=selected?.snapshot.engine_config.timeframes?.trigger??'5m';
@@ -87,7 +101,9 @@ export default function SignalReplays(){
     <div className="replay-table"><table><thead><tr><th>Gatilho · Brasília</th><th>Ativo / contexto</th><th>Preço no gatilho</th><th>Estado</th><th>Variação bruta</th><th/></tr></thead><tbody>{rows.map(r=>{const p=r.result?.return_pct??(r.status==='OPEN'&&r.last_price!=null?(r.last_price/r.baseline-1)*100:null);return <tr key={r.id} className={selectedId===r.id?'selected':''}><td>{date(r.triggered_at)}</td><td><strong>{r.symbol.replace('_','/')}</strong><small>{watchlists.find(w=>w.id===r.watchlist_id)?.name??r.watchlist_id}{r.profile_id?` · ${profiles.find(p=>p.id===r.profile_id)?.name??r.profile_id.slice(0,8)}`:''}</small></td><td>{number(r.baseline)}</td><td><span className={`replay-status ${r.status}`}>{r.status==='OPEN'&&r.last_price==null?'Preparando trajetória':labels[r.status]}</span>{r.issue&&<small>{issues[r.issue]??r.issue}</small>}</td><td>{p==null?'—':`${p.toFixed(2)}%`}{r.status==='OPEN'&&<small>Até o último candle capturado</small>}</td><td><button onClick={()=>{setLoading(true);setSelectedId(r.id);setSelected(null);setIndex(0);setPlaying(false);}}>Abrir replay</button></td></tr>;})}</tbody></table>{!rows.length&&<p className="replay-empty">Nenhuma ativação registrada neste filtro. Novos gatilhos são capturados no backend, mesmo com esta tela fechada.</p>}</div>
     <nav className="replay-controls"><button disabled={!offset} onClick={()=>setOffset(Math.max(0,offset-50))}>Anteriores</button><button disabled={next==null} onClick={()=>setOffset(next!)}>Próximos</button><span>Resultados de sinais, sem custos ou execução de ordens.</span></nav>
     {loading&&!selected&&<p role="status">Carregando trajetória…</p>}
-    {selected&&<section className="replay-detail"><div className="replay-detail-heading"><div><span className="replay-eyebrow">REPRODUÇÃO DO SINAL</span><h2>{selected.symbol.replace('_','/')} <small>{date(selected.triggered_at)}</small></h2></div><button onClick={()=>{setSelectedId(null);setSelected(null);setPlaying(false);}}>Fechar</button></div>
+    {selected&&<section className="replay-detail"><div className="replay-detail-heading"><div><span className="replay-eyebrow">REPRODUÇÃO DO SINAL</span><h2>{selected.symbol.replace('_','/')} <small>{date(selected.triggered_at)}</small></h2></div><div className="replay-controls"><button disabled={exporting} onClick={downloadReplay}>{exporting?'Preparando JSON…':'Baixar JSON completo'}</button><button onClick={()=>{setSelectedId(null);setSelected(null);setPlaying(false);setExportError('');}}>Fechar</button></div></div>
+      <p className="replay-caption">O JSON inclui todos os dados disponíveis deste replay, independentemente da posição da reprodução. Em acompanhamento: retrato até o momento do download.</p>
+      {exportError&&<p role="alert" className="replay-error">Falha ao baixar JSON: {exportError}</p>}
       <div className="replay-metrics"><div><small>Gatilho confirmado</small><strong>{number(selected.baseline)}</strong></div><div><small>Alvo congelado</small><strong>{number(selected.target)}</strong></div><div><small>Stop do sinal</small><strong>{number(selected.stop)}</strong></div><div><small>{finished?labels[selected.status]:'No instante selecionado'}</small><strong>{pct==null?'—':`${pct.toFixed(2)}%`}</strong></div></div>
       {selected.issue&&<p className="replay-warning">{issues[selected.issue]??selected.issue}</p>}
       {!selected.armed.length&&<p className="replay-warning">Sem registro anterior de ARMADO para esta ativação.</p>}
