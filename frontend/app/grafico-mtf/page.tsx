@@ -17,6 +17,7 @@ import { MTFBitcoinTicker } from '@/components/mtf/MTFBitcoinTicker';
 import { MTFFearGreed } from '@/components/mtf/MTFFearGreed';
 import { MTFEntryContext } from '@/components/mtf/MTFEntryContext';
 import { MTFTriggerAudio } from '@/components/mtf/MTFTriggerAudio';
+import { applyLivePreview, retainLivePreview, type PreviewEvent } from '@/lib/mtfLivePreview';
 
 const initialPreferences: Preferences = { theme: 'dark', timezone: 'America/Sao_Paulo', sound: false, aligned_only: false };
 const statusOrder = { TRIGGERED: 0, ARMED: 1, WAIT: 2, NO_TRADE: 3 };
@@ -58,6 +59,7 @@ export default function MTFPage() {
   useEffect(()=>{prefsRef.current=prefs;},[prefs]);
   useEffect(()=>{symbolRef.current=symbol;},[symbol]);
   const requestContext = useRef('');
+  const refreshChart = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -128,10 +130,14 @@ export default function MTFPage() {
     let first = true;
     let failures=0;
     const key = `${watchlist}:${symbol}:${profile}`;
+    let inFlight = false;
+    let refreshQueued = false;
     const sameContext=requestContext.current===key;
     requestContext.current = key;
     const poll = async () => {
-      if (!cfg || !watchlist || !symbol) return;
+      if (!cfg || !watchlist || !symbol || inFlight) return;
+      inFlight = true;
+      clearTimeout(timer);
       if (first) {setLoading(true);setEvaluationPending(true);}
       try {
         const query = new URLSearchParams({ watchlist_id: watchlist, symbol });
@@ -139,7 +145,7 @@ export default function MTFPage() {
         if (dataRef.current?.cursor) query.set('since',dataRef.current.cursor);
         const result = await apiFetch<ChartData>(`/mtf/chart?${query}`, { signal: controller.signal });
         if (controller.signal.aborted) return;
-        const merged=mergeChart(dataRef.current,result);
+        const merged=retainLivePreview(dataRef.current, mergeChart(dataRef.current,result));
         dataRef.current=merged;setData(merged);setLoadedContext(key); setError('');setStale(false);setMembership('current');setEvaluationPending(false);failures=0;
         const h = await apiFetch<{ items: HistoryItem[]; next_cursor: string | null }>(`/mtf/history?${new URLSearchParams({ watchlist_id: watchlist, symbol })}`, { signal: controller.signal });
         if (!controller.signal.aborted) { setHistory(h.items); setCursor(h.next_cursor); }
@@ -151,12 +157,62 @@ export default function MTFPage() {
         setMembership(state==='removed'?'removed':'current');
       } }
       finally {
+        inFlight = false;
         first = false;
-        if (!controller.signal.aborted) { setLoading(false); timer = setTimeout(poll, (failures&&cfg.presentation?Math.min(cfg.presentation.retry_max_seconds,cfg.presentation.retry_initial_seconds*2**(failures-1)):cfg.poll_seconds) * 1000); }
+        if (!controller.signal.aborted) { setLoading(false); timer = setTimeout(poll, refreshQueued ? 0 : (failures&&cfg.presentation?Math.min(cfg.presentation.retry_max_seconds,cfg.presentation.retry_initial_seconds*2**(failures-1)):cfg.poll_seconds) * 1000); refreshQueued = false; }
       }
     };
+    refreshChart.current = () => { if (inFlight) refreshQueued = true; else void poll(); };
     const start = setTimeout(() => { if(!sameContext){dataRef.current=null;setData(null);setHistory([]);setCursor(null);setError('');setStale(false);setMembership('current');} void poll(); }, 0);
-    return () => { controller.abort(); clearTimeout(timer); clearTimeout(start); };
+    return () => { controller.abort(); clearTimeout(timer); clearTimeout(start); refreshChart.current = null; };
+  }, [cfg, watchlist, symbol, profile, refresh]);
+
+  useEffect(() => {
+    if (!cfg?.presentation || !watchlist || !symbol) return;
+    const context = `${watchlist}:${symbol}:${profile}`;
+    const controller = new AbortController();
+    let socket: WebSocket | null = null;
+    let timer: ReturnType<typeof setTimeout>;
+    let failures = 0;
+    const invalidate = () => {
+      if (requestContext.current !== context || controller.signal.aborted) return;
+      const previous = dataRef.current;
+      if (previous?.forming_preview?.delivery === 'stream') {
+        const next = {...previous, forming_preview: {...previous.forming_preview,
+          state: 'UNAVAILABLE' as const, reason: 'STREAM_DISCONNECTED', diagnostics: null}};
+        dataRef.current = next; setData(next);
+      }
+    };
+    const retry = () => {
+      if (controller.signal.aborted) return;
+      invalidate();
+      timer = setTimeout(connect, Math.min(cfg.presentation!.retry_max_seconds,
+        cfg.presentation!.retry_initial_seconds * 2 ** failures++) * 1000);
+    };
+    const connect = async () => {
+      try {
+        const {url} = await apiFetch<{url: string}>('/mtf/stream-url', {signal: controller.signal});
+        if (controller.signal.aborted) return;
+        socket = new WebSocket(url);
+        socket.onopen = () => socket?.send(JSON.stringify({token: localStorage.getItem('token'),
+          symbol, watchlist_id: watchlist, profile_id: profile || null}));
+        socket.onmessage = e => {
+          if (controller.signal.aborted || requestContext.current !== context) return;
+          try {
+            const event = JSON.parse(e.data) as PreviewEvent | {type: 'resync'};
+            if (event.type === 'resync') { invalidate(); refreshChart.current?.(); return; }
+            if (event.type !== 'preview') return;
+            failures = 0;
+            const next = applyLivePreview(dataRef.current, event);
+            if (next && next !== dataRef.current) { dataRef.current = next; setData(next); }
+          } catch { invalidate(); }
+        };
+        socket.onerror = () => socket?.close();
+        socket.onclose = retry;
+      } catch { retry(); }
+    };
+    void connect();
+    return () => { controller.abort(); clearTimeout(timer); socket?.close(); };
   }, [cfg, watchlist, symbol, profile, refresh]);
 
   const monitor = async () => {

@@ -597,6 +597,8 @@ app.include_router(analysis_prompts_api.router)
 
 # WebSocket
 app.include_router(websocket.router)
+from .api import mtf_stream
+app.include_router(mtf_stream.router)
 
 
 @app.get("/api/health")
