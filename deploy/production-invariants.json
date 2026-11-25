@@ -7,6 +7,16 @@
   },
   "required_features": [
     {
+      "id": "mtf-stop-sized-by-gross-rr",
+      "description": "Optional stop sizing from a percentage target and gross RR, independent of RR veto and preserving frozen plans.",
+      "files": [
+        {"path":"backend/app/schemas/mtf_chart.py","contains_all":["class MTFStopSizing", "if not self.stop_sizing.enabled"]},
+        {"path":"backend/app/services/mtf_chart_engine.py","contains_all":["cfg.stop_sizing.target_pct / cfg.stop_sizing.gross_rr", "'reference_target'"]},
+        {"path":"backend/tests/test_mtf_chart_engine.py","contains_all":["test_stop_sized_from_gross_rr_without_enabling_rr_veto", "test_stop_sizing_validation_and_disabled_hash_compatibility"]},
+        {"path":"frontend/components/mtf/MTFSettingsDialog.tsx","contains_all":["Stop pelo RR bruto", "stop_sizing.gross_rr"]}
+      ]
+    },
+    {
       "id": "mtf-complete-replay-json-export",
       "description": "Owner-scoped complete JSON export of replay evidence, independent of playback and pagination.",
       "files": [

@@ -73,6 +73,7 @@ export interface RuleOperand { ref?:string; value?:number|string|boolean|number[
 export interface RuleCondition { id:string; label:string; enabled?:boolean; left:RuleOperand; operator:string; right:RuleOperand }
 export interface RuleGroup { logic:'AND'|'OR'; conditions:(RuleCondition|RuleGroup)[] }
 export interface MTFConfig {
+  stop_sizing?: {enabled:boolean; target_pct:number; gross_rr:number};
   timeframes?: StageTimeframes | null;
   indicators?: Record<string,IndicatorInstance> | null;
   frame_atr?: Partial<Record<Timeframe,string>> | null;

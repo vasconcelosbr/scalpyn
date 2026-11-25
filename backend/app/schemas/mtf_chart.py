@@ -10,6 +10,19 @@ LEGACY_FORCE_PATTERNS = ['ENGULF_BULL', 'MARUBOZU_BULL']
 LEGACY_REJECTION_PATTERNS = ['PIN_BULL', 'ENGULF_BULL']
 
 
+class MTFStopSizing(BaseModel):
+    model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
+    enabled: StrictBool = False
+    target_pct: float = Field(default=1, gt=0, le=100)
+    gross_rr: float = Field(default=2, gt=0)
+
+    @model_validator(mode='after')
+    def valid_stop(self):
+        if not 0 < self.target_pct / self.gross_rr < 100:
+            raise ValueError('STOP_DISTANCE_MUST_BE_BELOW_100_PERCENT')
+        return self
+
+
 class MTFFearGreedConfig(BaseModel):
     model_config = ConfigDict(extra='forbid', allow_inf_nan=False)
     enabled: StrictBool
@@ -167,6 +180,7 @@ class MTFChartConfig(BaseModel):
     zone_proximity_atr: float = Field(ge=0)
     rejection_lookback: int = Field(ge=1, le=20)
     stop_buffer_atr: float = Field(gt=0)
+    stop_sizing: MTFStopSizing = Field(default_factory=MTFStopSizing)
     max_stop_atr: float = Field(gt=0)
     min_rr_net: float = Field(gt=0)
     rr_bonus_threshold: float = Field(gt=0)
@@ -260,6 +274,9 @@ class MTFChartConfig(BaseModel):
 
     def engine_dump(self):
         data = self.model_dump(exclude={'presentation', 'pump_flow'})
+        # Disabled sizing preserves all legacy decision identities.
+        if not self.stop_sizing.enabled:
+            data.pop('stop_sizing', None)
         if self.schema_version == 'mtf_chart_v3':
             data.pop('structure_ema_period', None)
             for instance in data['indicators'].values(): instance.pop('display', None)

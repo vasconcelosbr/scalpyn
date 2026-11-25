@@ -149,6 +149,47 @@ def test_trigger_score_veto_rr_and_neutral_states(cfg):
     assert evaluate('BTC_USDT', frames, cfg, 28800, 0.01, 'UP')['status'] == 'WAIT'
 
 
+def test_stop_sized_from_gross_rr_without_enabling_rr_veto(cfg):
+    frames = setup_frames()
+    frames['5m']['candles'][-1].update(open=100, low=99.95)
+    data = cfg.model_dump()
+    data['min_score'] = 0
+    data['risk_per_trade_pct'] = .1
+    data['veto_filters']['risk_reward'] = False
+    legacy = MTFChartConfig.model_validate(data)
+    before = evaluate('BTC_USDT', frames, legacy, 28800, .01, 'UP')
+    data['stop_sizing'] = {'enabled': True, 'target_pct': 1, 'gross_rr': 2}
+    sized = MTFChartConfig.model_validate(data)
+    after = evaluate('BTC_USDT', frames, sized, 28800, .01, 'UP')
+    plan = after['plan']
+    assert after['status'] == 'TRIGGERED'
+    assert plan['stop'] == pytest.approx(99.5)
+    assert plan['stop'] < before['plan']['stop']
+    assert plan['stop_sizing']['stop_pct'] == .5
+    assert (plan['stop_sizing']['reference_target']-plan['entry'])/(plan['entry']-plan['stop']) == pytest.approx(2)
+    assert [plan['tp1'], plan['tp2']] == [before['plan']['tp1'], before['plan']['tp2']]
+    assert plan['quantity'] < before['plan']['quantity']
+    assert not sized.veto_filters.risk_reward
+    assert sized.engine_dump() != legacy.engine_dump()
+    # A later config edit must never resize an already frozen Shadow stop.
+    changed = sized.model_copy(update={'stop_sizing': sized.stop_sizing.model_copy(update={'gross_rr': 4})})
+    pending_state = {**plan,'status':'PENDING','observed_at':28801,'expires_at':30000,'last_candle':-1}
+    stepped = simulate_step(pending_state, candle(t=29100,o=100,h=100.2,l=99.6,c=100),changed)
+    assert stepped['status']=='OPEN' and stepped['stop']==plan['stop']
+
+
+def test_stop_sizing_validation_and_disabled_hash_compatibility(cfg):
+    data=cfg.model_dump()
+    data.pop('stop_sizing')
+    legacy=MTFChartConfig.model_validate(data)
+    assert 'stop_sizing' not in legacy.engine_dump()
+    data['stop_sizing']={'enabled':False,'target_pct':2,'gross_rr':3}
+    assert MTFChartConfig.model_validate(data).engine_dump()==legacy.engine_dump()
+    for target,rr in [(1,0),(1,-1),(1,float('nan')),(1,float('inf')),(100,1)]:
+        data['stop_sizing']={'enabled':True,'target_pct':target,'gross_rr':rr}
+        with pytest.raises(ValueError): MTFChartConfig.model_validate(data)
+
+
 def test_frozen_window_matches_producer(cfg):
     config = {'ema': {'enabled':True,'periods':[9]}, 'atr':{'enabled':True,'period':14}}
     cs = [candle(t=i*300,c=100+math.sin(i)) for i in range(80)]

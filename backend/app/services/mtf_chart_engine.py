@@ -303,10 +303,12 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
     if confirmed and armed:
         entry = c["close"]
         stop = c["low"] - max(cfg.stop_buffer_atr * f5["atr"], entry*(spread_pct or 0)/100)
+        if cfg.stop_sizing.enabled:
+            stop = entry * (1 - cfg.stop_sizing.target_pct / cfg.stop_sizing.gross_rr / 100)
         targets = sorted({z["low"] for z in zs if z["type"] == "RESISTANCE" and z["low"] > entry})
         targets = targets or sorted({p["price"] for p in f1["pivots"] if p["kind"] == "H" and p["price"] > entry})
         plan_inputs = dict(stop=stop, stop_distance=entry-stop, target_count=len(targets))
-        if stop <= 0:
+        if stop <= 0 or stop >= entry:
             vetoes.append("INVALID_PLAN")
         elif cfg.veto_filters.stop_distance and entry-stop > cfg.max_stop_atr*f5["atr"]:
             vetoes.append("STOP_TOO_WIDE")
@@ -331,6 +333,14 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
                 "quantity": qty, "notional_usdt": qty*entry if qty else None,
                 "expires_after_candles": cfg.expires_after_candles,
                 "expires_at": iso(as_of+cfg.expires_after_candles*TF_SECONDS[trigger_tf])}
+            if cfg.stop_sizing.enabled:
+                result['plan']['stop_sizing'] = {
+                    'mode': 'gross_rr', 'reference_entry': entry,
+                    'target_pct': cfg.stop_sizing.target_pct,
+                    'reference_target': entry * (1 + cfg.stop_sizing.target_pct / 100),
+                    'gross_rr': cfg.stop_sizing.gross_rr,
+                    'stop_pct': cfg.stop_sizing.target_pct / cfg.stop_sizing.gross_rr,
+                }
     flags = {"trend": direction == "UP", "force": force and direction == "UP", "zone": near,
              "rejection": rejection and near, "trigger": bool(trigger), "volume": ratio is not None and ratio >= cfg.vol_mult,
              "rr": rr is not None and rr >= cfg.rr_bonus_threshold}

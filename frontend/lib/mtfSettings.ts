@@ -19,6 +19,7 @@ export function settingsDraft(config: MTFConfig | null, boot: Bootstrap): MTFCon
   next.force_patterns ??= boot.preset.force_patterns;
   next.rejection_patterns ??= boot.preset.rejection_patterns;
   if (next.veto_filters == null && boot.preset.veto_filters != null) next.veto_filters = structuredClone(boot.preset.veto_filters);
+  if (next.stop_sizing == null && boot.preset.stop_sizing != null) next.stop_sizing = structuredClone(boot.preset.stop_sizing);
   return next;
 }
 
@@ -108,6 +109,8 @@ export function validateSettings(config: MTFConfig, root: ConfigSchema): Record<
   };
   visit(config, root, '');
   if (Object.keys(errors).length) return errors;
+  if (config.stop_sizing && config.stop_sizing.target_pct / config.stop_sizing.gross_rr >= 100)
+    errors['stop_sizing.gross_rr'] = 'A distância do stop deve ser menor que 100% do preço.';
   const weights = config.score_weights as Record<string, number>;
   if (weights && Number(config.min_score) > Object.values(weights).reduce((s, v) => s + v, 0) + (config.rules?.scoring?.reduce((s,r)=>s+r.points,0) ?? 0)) errors.min_score = 'O score mínimo excede a soma dos pesos.';
   if (Number(config.rr_bonus_threshold) < Number(config.min_rr_net)) errors.rr_bonus_threshold = 'O bônus deve ser igual ou maior que o retorno/risco mínimo.';
