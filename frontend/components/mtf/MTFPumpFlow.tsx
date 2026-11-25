@@ -4,7 +4,7 @@ import { apiFetch } from '@/lib/api';
 import type { FlowComparison, PumpFlowContext, Timeframe } from './types';
 import { number } from './types';
 
-export const flowLabels: Record<string,string> = {inflow:'Entrada',outflow:'Saída',neutral:'Neutro',unavailable:'Indisponível',confirmed:'Confirmado',not_confirmed:'Não confirmado',divergent:'Vendedor',disabled:'Desativado',baseline:'MTF original'};
+export const flowLabels: Record<string,string> = {inflow:'Entrada',outflow:'Saída',neutral:'Neutro',unavailable:'Indisponível',confirmed:'Confirmado',not_confirmed:'Não confirmado',divergent:'Vendedor',disabled:'Desativado',baseline:'MTF original',revised_confirmed:'Confirmado na reavaliação',revised_not_confirmed:'Não confirmado na reavaliação',revised_unavailable:'Indisponível na reavaliação'};
 const reasons: Record<string,string> = {asset_not_in_pump_universe:'Ativo fora do universo Pump',no_trades:'Sem negócios na janela',incomplete_or_delayed_window:'Janela incompleta ou atrasada',incomplete_window:'Janela incompleta: cobertura abaixo do mínimo',delayed_window:'Janela atrasada: último minuto ainda não consolidado',pump_snapshot_stale_or_missing:'Snapshot Pump ausente ou vencido',source_unavailable:'Fonte temporariamente indisponível',evaluation_outside_flow_freshness:'Avaliação fora da validade configurada'};
 const pct = (v?: number | null) => v == null ? '—' : `${number(v*100,2)}%`;
 

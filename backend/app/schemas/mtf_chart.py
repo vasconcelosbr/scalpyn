@@ -101,6 +101,16 @@ class MTFVetoFilters(BaseModel):
     risk_reward: StrictBool = True
 
 
+class MTFPumpFlowRevision(BaseModel):
+    """One deferred, immutable re-reading of the flow for an evaluation whose flow was
+    unavailable at capture (typically read before the Pump cycle published the last
+    closed minute). Stored apart from the frozen evaluation; never alters it."""
+    model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
+    enabled: StrictBool
+    delay_seconds: int = Field(ge=1, le=3600)
+    batch_limit: int = Field(ge=1, le=5000)
+
+
 class MTFPumpFlowConfig(BaseModel):
     """Context-only hypothesis; never part of the MTF engine identity or gates."""
     model_config = ConfigDict(extra="forbid", allow_inf_nan=False)
@@ -114,6 +124,13 @@ class MTFPumpFlowConfig(BaseModel):
     asset_window: Timeframe = '5m'
     asset_min_delta: float = Field(gt=0, le=1)
     asset_min_buy_persistence: float = Field(gt=0, le=1)
+    # Optional block: absent means no deferred revision (opt-in, no legacy fallback).
+    revision: MTFPumpFlowRevision | None = None
+
+    def identity_dump(self) -> dict:
+        """Reading parameters only. The revision schedule never changes what a reading
+        means, so it stays out of the flow config_hash and of the engine identity."""
+        return self.model_dump(exclude={'revision'})
 
     @model_validator(mode='after')
     def complete(self):
@@ -124,6 +141,9 @@ class MTFPumpFlowConfig(BaseModel):
             raise ValueError('CAPITAL_WINDOWS_MISMATCH')
         if any(not 0 < value <= 1 for value in self.capital_neutral_ratio.values()):
             raise ValueError('CAPITAL_RATIO_OUT_OF_RANGE')
+        # A revision later than the freshness limit could never be evaluated.
+        if self.revision and self.revision.delay_seconds >= self.max_evaluation_delay_seconds:
+            raise ValueError('REVISION_AFTER_FRESHNESS_LIMIT')
         return self
 
 
@@ -135,6 +155,7 @@ def pump_flow_preset() -> dict:
         'capital_neutral_ratio': {'4h': .03, '1h': .03, '5m': .03},
         'require_capital': {'4h': False, '1h': True, '5m': False},
         'asset_min_delta': .03, 'asset_min_buy_persistence': .6,
+        'revision': {'enabled': True, 'delay_seconds': 120, 'batch_limit': 200},
     }).model_dump()
 
 
@@ -299,7 +320,7 @@ class MTFChartConfig(BaseModel):
         if self.schema_version == 'mtf_chart_v3':
             data.pop('structure_ema_period', None)
             for instance in data['indicators'].values(): instance.pop('display', None)
-            if rule_uses_flow(self.rules): data['pump_flow'] = self.pump_flow.model_dump()
+            if rule_uses_flow(self.rules): data['pump_flow'] = self.pump_flow.identity_dump()
             return data
         for key in ('timeframes','indicators','rules','zone_algorithm','structure_ema_period','frame_atr'):
             data.pop(key, None)
