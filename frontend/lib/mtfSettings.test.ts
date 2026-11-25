@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {settingsDraft, settingsForSave, targetLabel, targetPoints, validateSettings, withConfigValue} from './mtfSettings';
+import {booleanSelectValue, settingsDraft, settingsForSave, targetLabel, targetPoints, validateSettings, withConfigValue} from './mtfSettings';
 import {mergeChart, type Bootstrap, type Candle, type ChartData, type ConfigSchema, type MTFConfig} from '../components/mtf/types';
 
 const candle = (time:number, close:number):Candle=>({time,close,open:close,high:close,low:close,volume:1,closed:false});
@@ -140,4 +140,11 @@ test('recursive JSON schema accepts all operand alternatives and reports invalid
   const invalid=structuredClone(valid) as unknown as {rules:{conditions:unknown[]}};
   invalid.rules.conditions=[{conditions:[{value:{invalid:true}}]}];
   assert.ok(Object.keys(validateSettings(invalid as unknown as MTFConfig,schema)).some(k=>k.includes('rules.conditions')));
+});
+
+
+test('absent boolean settings read as unset, never as the first option', () => {
+  assert.equal(booleanSelectValue(true), 'true');
+  assert.equal(booleanSelectValue(false), 'false');
+  for (const missing of [undefined, null, 'true', 1]) assert.equal(booleanSelectValue(missing), '');
 });

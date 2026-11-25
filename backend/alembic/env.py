@@ -34,12 +34,24 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+# Revisions applied by this run. Any applied migration may have written
+# config_profiles directly, bypassing ConfigService and its Redis cache.
+_APPLIED: list = []
+
+
+def _record_applied(*, ctx, step, heads, run_args) -> None:
+    # A stamp only rewrites alembic_version (start.sh fallback): no data changed.
+    if not step.is_stamp:
+        _APPLIED.append(step.up_revision_id if step.is_upgrade else step.down_revision_ids)
+
+
 def do_run_migrations(connection: Connection) -> None:
     # lock_timeout and statement_timeout are applied at connection level via
     # asyncpg server_settings in run_async_migrations — more reliable than
     # SET LOCAL here (which depends on alembic's internal transaction state
     # and was silently inert in production with asyncpg + run_sync).
-    context.configure(connection=connection, target_metadata=target_metadata)
+    context.configure(connection=connection, target_metadata=target_metadata,
+                      on_version_apply=_record_applied)
     with context.begin_transaction():
         context.run_migrations()
 
@@ -92,6 +104,11 @@ async def run_async_migrations() -> None:
     async with connectable.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await connectable.dispose()
+    # After commit: readers repopulate the config cache from the migrated rows.
+    if _APPLIED:
+        from app.services.config_service import invalidate_config_cache_sync
+        removed = invalidate_config_cache_sync()
+        print(f"==> [migrations] applied={len(_APPLIED)} config_cache_invalidated={removed}")
 
 
 def run_migrations_online() -> None:

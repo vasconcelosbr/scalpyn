@@ -4,7 +4,7 @@ import { MTFJsonTools } from './MTFJsonTools';
 import { useEffect, useRef, useState } from 'react';
 import { X, SlidersHorizontal, Crosshair, Layers, Settings2, ShieldCheck } from 'lucide-react';
 import { apiFetch, ApiError } from '@/lib/api';
-import { configValue, schemaAt, settingsDraft, settingsForSave, validateSettings, withConfigValue } from '@/lib/mtfSettings';
+import { booleanSelectValue, configValue, schemaAt, settingsDraft, settingsForSave, validateSettings, withConfigValue } from '@/lib/mtfSettings';
 import { patternLabels, type Bootstrap, type MTFConfig } from './types';
 
 type Tab = 'flow' | 'armed' | 'trigger' | 'vetoes' | 'shared' | 'advanced';
@@ -202,7 +202,7 @@ export function MTFSettingsDialog({config, boot, onClose, onSaved}: {config: MTF
       <label htmlFor={id}>{spec.label}{spec.unit && <span>{spec.unit}</span>}</label>
       {spec.kind==='btc-timeframe' ? <select id={id} disabled={saving} value={String(value ?? '4h')} onChange={e=>update(spec.path,e.target.value)}>{(draft.schema_version==='mtf_chart_v3' ? boot.catalog?.timeframes ?? [] : ['4h','1h']).map(tf=><option key={tf} value={tf}>{tf.toUpperCase()}</option>)}</select> : spec.kind==='patterns' ? <div className="mtf-pattern-options" role="group" aria-label={spec.label}>
         {['ENGULF_BULL','PIN_BULL','MARUBOZU_BULL'].map(pattern=><label key={pattern}><input type="checkbox" disabled={saving} checked={(value as string[] ?? []).includes(pattern)} onChange={e=>update(spec.path,e.target.checked?[...(value as string[] ?? []),pattern]:(value as string[]).filter(p=>p!==pattern))}/>{patternLabels[pattern]}</label>)}
-      </div> : spec.kind==='boolean' ? <select id={id} disabled={saving} value={String(value)} onChange={e=>update(spec.path,e.target.value==='true')}><option value="true">Sim</option><option value="false">Não</option></select> :
+      </div> : spec.kind==='boolean' ? <select id={id} disabled={saving} value={booleanSelectValue(value)} onChange={e=>update(spec.path,e.target.value==='true')}>{booleanSelectValue(value)===''&&<option value="" disabled>Não definido</option>}<option value="true">Sim</option><option value="false">Não</option></select> :
         <input id={id} disabled={saving} type="number" step={schema.type==='integer'?1:'any'} min={schema.minimum} max={schema.maximum} value={displayed==null?'':String(displayed)} aria-invalid={!!issue} aria-describedby={`${id}-hint`} onChange={e=>update(spec.path,e.target.value===''?'':Number(e.target.value))}/>}
       <small id={`${id}-hint`}>{spec.hint}{inherited && boot.inherited_atr?.enabled && <em> Valor herdado; será copiado ao salvar alterações nas regras.</em>}</small>
       {issue && <p className="mtf-field-error" role="alert">{issue}</p>}
