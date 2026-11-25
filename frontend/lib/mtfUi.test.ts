@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mergeChart, visibleMarks, readingLabel, reasonLabel, type ChartData, type Presentation, type Preferences, type Frame } from '../components/mtf/types';
+import { mergeChart, visibleMarks, readingLabel, reasonLabel, type ChartData, type Presentation, type Preferences, type Frame, type TriggerCheck } from '../components/mtf/types';
 
 const preferences:Preferences={theme:'dark',timezone:'UTC',sound:false,aligned_only:false};
 test('presentation translates stored enums and does not expose unknown veto codes',()=>{
@@ -33,4 +33,12 @@ test('marker budget prioritizes current trigger and respects overlay toggles',()
   const marks=visibleMarks(frame,config,preferences,trigger);
   assert.equal(marks.length,4);assert(marks.some(m=>m.time===20&&m.pattern));
   assert.equal(visibleMarks(frame,config,{...preferences,show_patterns:false,show_pivots:false},trigger).length,0);
+});
+
+
+test('risk audit vetoes name the failed check instead of a generic AUDIT suffix',()=>{
+  const checks=[{id:'audit:zone_alignment',label:'Direção zone',actual:'DOWN',operator:'=',expected:'UP',unit:'',role:'required',timeframe:'1h',state:'FAIL',gap:null,note:null}] as TriggerCheck[];
+  assert.equal(reasonLabel('RISK_AUDIT:audit:zone_alignment',undefined,checks),'Auditoria de risco: Direção zone · 1H — reprovado');
+  assert.equal(reasonLabel('RISK_AUDIT:audit:structure_integrity',undefined,checks),'Auditoria de risco: verificação não atendida');
+  assert.equal(reasonLabel('INVALID_PLAN'),'Plano inválido: entrada, stop ou risco inconsistente');
 });

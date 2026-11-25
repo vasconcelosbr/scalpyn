@@ -240,7 +240,10 @@ def capital_minutes(buckets_by_symbol: Dict[str, Dict[int, Dict[str, Any]]], sym
     """Per-minute USDT taker flow of the whole universe (oldest first).
 
     Only USDT-quoted, non-excluded symbols; a symbol-minute counts only when its
-    bucket is complete (same usability rule as every flow metric)."""
+    bucket is complete (same usability rule as every flow metric) and carries both
+    quote volumes. A complete bucket whose quote volume is unknown (a trade without
+    price) is not a zero-flow minute: counting it as complete would publish 0 USDT
+    with full symbol coverage."""
     cf = spec.get("capital_flow") or {}
     suffix = str(cf.get("quote_suffix") or "_USDT")
     excluded = set(cf.get("exclude_symbols") or [])
@@ -255,9 +258,12 @@ def capital_minutes(buckets_by_symbol: Dict[str, Dict[int, Dict[str, Any]]], sym
             bucket = (buckets_by_symbol.get(symbol) or {}).get(minute)
             if bucket is None or bucket.get("partial"):
                 continue
+            buy_quote, sell_quote = bucket.get("buy_quote"), bucket.get("sell_quote")
+            if buy_quote is None or sell_quote is None:
+                continue
             complete += 1
-            buy += float(bucket.get("buy_quote") or 0.0)
-            sell += float(bucket.get("sell_quote") or 0.0)
+            buy += float(buy_quote)
+            sell += float(sell_quote)
         out.append({"minute_ms": minute, "buy_usdt": buy, "sell_usdt": sell,
                     "symbols": len(universe), "complete_symbols": complete})
     return out
@@ -277,6 +283,41 @@ _UPSERT_CAPITAL = text("""
         window_ratio = EXCLUDED.window_ratio, z = EXCLUDED.z, state = EXCLUDED.state,
         method = EXCLUDED.method, config_version = EXCLUDED.config_version, computed_at = now()
 """)
+
+
+# Revision of an already published minute after its buckets were reprocessed in the
+# lookback (late trades, a partial bucket turning complete). Only the per-minute
+# aggregates change: the window fields (ratio, z, state) belong to the cycle that
+# published the row and are never restamped. Same universe size only, coverage never
+# decreases, and an unchanged minute is not rewritten (computed_at keeps its meaning).
+_REVISE_CAPITAL = text("""
+    UPDATE pump_capital_flow_1m
+       SET buy_usdt = CAST(:buy_usdt AS numeric), sell_usdt = CAST(:sell_usdt AS numeric),
+           net_usdt = CAST(:net_usdt AS numeric), complete_symbols = :complete_symbols,
+           computed_at = now()
+     WHERE user_id = CAST(:user_id AS uuid) AND minute = :minute
+       AND symbols = :symbols AND complete_symbols <= :complete_symbols
+       AND (buy_usdt, sell_usdt, complete_symbols) IS DISTINCT FROM
+           (CAST(:buy_usdt AS numeric), CAST(:sell_usdt AS numeric), :complete_symbols)
+""")
+
+
+def capital_revisions(user_id, cap_minutes: List[Dict[str, Any]], reprocessed_ms: List[int]) -> List[Dict[str, Any]]:
+    """Params for :data:`_REVISE_CAPITAL`: every reprocessed minute except the last,
+    which the regular upsert publishes with its window fields."""
+    revisable = set(int(m) for m in reprocessed_ms[:-1])
+    out = []
+    for minute in cap_minutes[:-1]:
+        if int(minute["minute_ms"]) not in revisable:
+            continue
+        out.append({
+            "user_id": str(user_id),
+            "minute": datetime.fromtimestamp(minute["minute_ms"] / 1000.0, tz=timezone.utc),
+            "buy_usdt": round(minute["buy_usdt"], 2), "sell_usdt": round(minute["sell_usdt"], 2),
+            "net_usdt": round(minute["buy_usdt"] - minute["sell_usdt"], 2),
+            "symbols": minute["symbols"], "complete_symbols": minute["complete_symbols"],
+        })
+    return out
 
 
 def capital_row(user_id, minute: Dict[str, Any], capital: Dict[str, Any], config_version: int) -> Dict[str, Any]:
@@ -780,8 +821,11 @@ async def _cycle_for_user(user_id, config: Dict[str, Any]) -> Dict[str, Any]:
     if capital and cap_minutes and capital.get("state") not in (None, "desligado"):
         try:
             last_cap = cap_minutes[-1]
+            revisions = capital_revisions(user_id, cap_minutes, minutes)
 
             async def _write_capital(db):
+                if revisions:
+                    await db.execute(_REVISE_CAPITAL, revisions)
                 await db.execute(_UPSERT_CAPITAL, capital_row(user_id, last_cap, capital, int(meta["version"])))
             await run_db_task(_write_capital, celery=True)
         except Exception as exc:
