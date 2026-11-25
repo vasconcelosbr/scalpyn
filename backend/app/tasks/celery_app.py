@@ -824,7 +824,7 @@ celery_app.conf.update(
 celery_app.conf.beat_schedule = {
     "mtf_history_after_close": {
         "task": "app.tasks.mtf_history.dispatch",
-        "schedule": crontab(minute="*/5"),
+        "schedule": crontab(minute="*"),
         "options": {"queue": QUEUE_MTF_HISTORY, "expires": 240},
     },
     "mtf_history_maintenance": {

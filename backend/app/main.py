@@ -454,6 +454,8 @@ app.include_router(watchlist.router)
 app.include_router(watchlists.router)
 app.include_router(mtf_chart.router)
 app.include_router(mtf_history.router)
+from .api import mtf_signal_replay
+app.include_router(mtf_signal_replay.router)
 app.include_router(radar_readonly.router)
 app.include_router(pump_readonly.router)
 app.include_router(watchlists.pipeline_router)

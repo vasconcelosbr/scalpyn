@@ -55,7 +55,7 @@ def test_online_migration_config_and_dedup(database):
     assert db.scalar(sa.text('SELECT count(*) FROM mtf_chart_evaluations WHERE user_id=:uid'),{'uid':uuid4()}) == 0
 
 
-def test_service_persistence_shadow_isolation_and_report(database):
+def test_service_persistence_shadow_isolation_and_report(database, monkeypatch):
     import asyncio
     from app.schemas.mtf_chart import MTFChartConfig, experimental_preset
     from app.services.mtf_chart_service import persist_evaluation, append_shadow
@@ -63,6 +63,7 @@ def test_service_persistence_shadow_isolation_and_report(database):
     from test_mtf_chart_engine import setup_frames
     from app.api.mtf_chart import report, history
     from unittest.mock import patch, AsyncMock
+    monkeypatch.setattr('app.services.mtf_signal_replay.record_data', AsyncMock())
     from datetime import datetime, timezone
     db, uid = database
     class Adapter:
