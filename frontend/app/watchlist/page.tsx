@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { diagnosticHref } from '@/lib/watchlistDiagnostic';
 
 import { useState, useEffect, useCallback, useRef, Fragment } from 'react';
 import { WatchlistTable } from '@/components/watchlist/WatchlistTable';
@@ -913,11 +914,13 @@ function FuturesDrilldown({ asset }: { asset: FuturesAsset }) {
 }
 
 function FuturesAssetTable({
+  watchlistId,
   assets,
   loading,
   hideNeutral,
   onToggleHideNeutral,
 }: {
+  watchlistId: string;
   assets: FuturesAsset[];
   loading: boolean;
   hideNeutral: boolean;
@@ -1007,7 +1010,7 @@ function FuturesAssetTable({
                           style={{ transform: isOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
                         />
                       </td>
-                      <td className="px-3 py-2.5 font-semibold text-[#E2E8F0] tracking-wide">{asset.symbol}</td>
+                      <td className="px-3 py-2.5 font-semibold text-[#E2E8F0] tracking-wide"><Link href={diagnosticHref(watchlistId,asset.symbol)} onClick={e => e.stopPropagation()} className="hover:text-blue-300 hover:underline">{asset.symbol}</Link></td>
                       <td className="px-3 py-2.5">
                         <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold ${dirCls}`}>
                           {dirLabel}
@@ -1422,6 +1425,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
             </div>
           ) : detailTab === 'approved' && isFutures ? (
             <FuturesAssetTable
+              watchlistId={wl.id}
               assets={futuresAssets}
               loading={loadingAssets}
               hideNeutral={hideNeutral}
@@ -1434,6 +1438,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
             </div>
           ) : detailTab === 'approved' ? (
             <WatchlistDecisionTable
+              watchlistId={wl.id}
               items={approvedItems}
               loading={loadingAssets}
               emptyMessage="Nenhum ativo aprovado para os filtros atuais."
@@ -1455,6 +1460,7 @@ function WatchlistRow({ wl, pools, allWatchlists, profiles, onEdit, onDelete, on
             </div>
           ) : (
             <WatchlistDecisionTable
+              watchlistId={wl.id}
               items={detailTab === 'awaiting_data' ? awaitingDataItems : rejectedItems}
               loading={profileDisplay ? loadingAssets : loadingRejected}
               emptyMessage={detailTab === 'awaiting_data' ? 'Nenhum ativo aguardando atualização dos dados.' : 'Nenhum ativo rejeitado pelas regras configuradas.'}
@@ -1682,7 +1688,7 @@ function L3ConsolidatedCard({ refreshTick }: { refreshTick: number }) {
                               {asset.symbol.slice(0, 1)}
                             </span>
                             <div>
-                              <div className="font-mono text-sm font-semibold text-[#E2E8F0]">{asset.symbol}</div>
+                              <Link href={diagnosticHref(asset.watchlist_id,asset.symbol)} className="font-mono text-sm font-semibold text-[#E2E8F0] hover:text-blue-300 hover:underline">{asset.symbol}</Link>
                               <div className="text-[9px] uppercase tracking-[0.1em] text-[#4B5563]">
                                 {tab !== 'awaiting_data' ? 'aprovado no perfil' : 'avaliação pendente'}
                               </div>

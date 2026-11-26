@@ -85,9 +85,10 @@ async function proxyRequest(req: NextRequest, context: RouteContext): Promise<Ne
 
   if (
     backendRes.headers.get("content-type")?.includes("text/event-stream") ||
-    (req.method === 'GET' && /^\/api\/mtf\/replays\/[^/]+\/export$/.test(rawPath))
+    (req.method === 'GET' && /^\/api\/mtf\/replays\/[^/]+\/export$/.test(rawPath)) ||
+    (req.method === 'GET' && /^\/api\/watchlists\/[^/]+\/assets\/[^/]+\/diagnostic$/.test(rawPath))
   ) {
-    // Replay exports can contain extensive historical evidence; forward the
+    // Replay exports and full diagnostics contain extensive evidence; forward the
     // stream instead of buffering the entire attachment in the proxy.
     resHeaders.delete('content-length');
     return new NextResponse(backendRes.body, {

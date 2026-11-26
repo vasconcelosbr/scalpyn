@@ -1,6 +1,8 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
+import Link from "next/link";
+import { diagnosticHref } from "@/lib/watchlistDiagnostic";
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle } from "lucide-react";
 import {
   EvaluationTraceBreakdown,
@@ -271,6 +273,7 @@ function metricTopIndicator(items: WatchlistDecisionItem[]): string {
 }
 
 export function WatchlistDecisionTable({
+  watchlistId,
   items,
   loading,
   emptyMessage,
@@ -279,6 +282,7 @@ export function WatchlistDecisionTable({
   expandedRow,
   onExpandedRowChange,
 }: {
+  watchlistId?: string;
   items: WatchlistDecisionItem[];
   loading: boolean;
   emptyMessage?: string;
@@ -519,12 +523,14 @@ export function WatchlistDecisionTable({
                   <Fragment key={rowKey}>
                     <tr
                       className={`cursor-pointer border-b border-[#1A2035]/60 hover:bg-[#0D1118] ${palette.row}`}
-                      onClick={() => onExpandedRowChange(isExpanded ? null : rowKey)}
+                      onClick={() => watchlistId ? window.location.assign(diagnosticHref(watchlistId, item.symbol)) : onExpandedRowChange(isExpanded ? null : rowKey)}
                     >
                       <td className="px-2 py-2.5 text-[#334155]">
-                        {isExpanded ? <ChevronDown size={13} className="text-[#60A5FA]" /> : <ChevronRight size={13} />}
+                        <button type="button" aria-label={`Resumo de ${item.symbol}`} aria-expanded={isExpanded} onClick={e => { e.stopPropagation(); onExpandedRowChange(isExpanded ? null : rowKey); }}>
+                          {isExpanded ? <ChevronDown size={13} className="text-[#60A5FA]" /> : <ChevronRight size={13} />}
+                        </button>
                       </td>
-                      <td className="px-3 py-2.5 font-semibold text-[#E2E8F0]">{item.symbol}</td>
+                      <td className="px-3 py-2.5 font-semibold text-[#E2E8F0]">{watchlistId ? <Link href={diagnosticHref(watchlistId,item.symbol)} onClick={e => e.stopPropagation()} className="hover:text-blue-300 hover:underline" aria-label={`Abrir diagnóstico de ${item.symbol}`}>{item.symbol}</Link> : item.symbol}</td>
                       {showScore && <td className="px-3 py-2.5"><ScoreBar value={item.final_score ?? item.alpha_score} technical={item.technical_score} /></td>}
                       <td className="px-3 py-2.5"><SocialScoreCell value={item.social_score} /></td>
                       <td className="px-3 py-2.5 text-center">
