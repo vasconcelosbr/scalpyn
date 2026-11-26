@@ -57,8 +57,8 @@ def test_owned_complete_snapshot_and_rejected_only_asset(database, level):
         connection.execute(sa.text('''INSERT INTO indicators VALUES(now()-make_interval(mins=>:age),
             'TEST_USDT',:tf,:market,:group,CAST(:payload AS jsonb))'''), locals())
     connection.execute(sa.text('''INSERT INTO decisions_log VALUES(:id,:uid,:pid,'TEST_USDT',
-        'EVALUATION','{"frozen_input":{"rsi":25}}',now())'''),
-        {'id':uuid4(),'uid':uid,'pid':profile.id})
+        'EVALUATION',CAST(:metrics AS jsonb),now())'''),
+        {'id':uuid4(),'uid':uid,'pid':profile.id,'metrics':'{"frozen_input":{"rsi":25}}'})
     class ReadOnly:
         async def scalar(self, statement, params=None):
             assert str(statement).lstrip().upper().startswith('SELECT')
