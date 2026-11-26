@@ -38,7 +38,7 @@ test('marker budget prioritizes current trigger and respects overlay toggles',()
 
 test('risk audit vetoes name the failed check instead of a generic AUDIT suffix',()=>{
   const checks=[{id:'audit:zone_alignment',label:'Direção zone',actual:'DOWN',operator:'=',expected:'UP',unit:'',role:'required',timeframe:'1h',state:'FAIL',gap:null,note:null}] as TriggerCheck[];
-  assert.equal(reasonLabel('RISK_AUDIT:audit:zone_alignment',undefined,checks),'Auditoria de risco: Direção zone · 1H — reprovado');
-  assert.equal(reasonLabel('RISK_AUDIT:audit:structure_integrity',undefined,checks),'Auditoria de risco: verificação não atendida');
+  assert.equal(reasonLabel('RISK_AUDIT:audit:zone_alignment',undefined,checks),'Auditoria de risco: Direção estrutural do período da zona · 1H — reprovado');
+  assert.equal(reasonLabel('RISK_AUDIT:audit:structure_integrity',undefined,checks),'Auditoria de risco: Integridade da estrutura principal — detalhes indisponíveis nesta avaliação');
   assert.equal(reasonLabel('INVALID_PLAN'),'Plano inválido: entrada, stop ou risco inconsistente');
 });

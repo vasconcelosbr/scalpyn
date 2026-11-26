@@ -7,6 +7,18 @@
   },
   "required_features": [
     {
+      "id": "mtf-frozen-diagnostic-explanations",
+      "description": "MTF vetoes identify their frozen checks; technical explanations preserve parameters, operand timeframes, E/OU groups and structural evidence without changing decisions.",
+      "files": [
+        {"path":"backend/app/services/mtf_diagnostic_explanations.py","contains_all":["mtf_check_explanation_v1","def explain_diagnostics","def complete_service_explanations"]},
+        {"path":"backend/app/services/mtf_chart_engine.py","contains_all":["explain_diagnostics(result, frames, cfg","row['rule_tree'] = trace"]},
+        {"path":"frontend/components/mtf/MTFCheckDetails.tsx","contains_all":["Como é calculado e por que este resultado","function RuleTree"]},
+        {"path":"frontend/components/shadow-portfolio/TradeCandlestickChart.tsx","contains_all":["<MTFEntryBandVetoes analysis={data.analysis} presentation={config}"]},
+        {"path":"backend/tests/test_mtf_diagnostic_explanations.py","contains_all":["test_explanations_leave_decision_signal_identity_and_inputs_unchanged","test_cross_preserves_both_operand_times_windows_and_configurations"]},
+        {"path":"frontend/lib/mtfDiagnosticExplanations.test.ts","contains_all":["actual candidate-band component receives audit checks","legacy detail never manufactures snapshot"]}
+      ]
+    },
+    {
       "id": "mtf-context-risk-audit",
       "description": "Independent causal context and risk gates with fail-closed publication and immutable replay evidence.",
       "files": [

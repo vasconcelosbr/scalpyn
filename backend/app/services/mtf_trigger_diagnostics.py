@@ -168,3 +168,5 @@ def finalize_diagnostics(analysis, cfg, now, cutoff):
                              unit='points', note=row['note']))
         if row['id'].startswith('data:'):
             row['note'] = analysis.get('data_errors', {}).get(row['timeframe']) or row['note']
+    from .mtf_diagnostic_explanations import complete_service_explanations
+    complete_service_explanations(analysis, cfg, cutoff)

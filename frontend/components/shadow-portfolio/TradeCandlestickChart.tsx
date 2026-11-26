@@ -21,7 +21,7 @@ import { ZonePrimitive } from '@/components/mtf/ZonePrimitive';
 import { EntryBandPrimitive } from '@/components/mtf/EntryBandPrimitive';
 import { MTFTriggerReadiness } from '@/components/mtf/MTFTriggerReadiness';
 import { entryBandView, entryBandLabels, entryBandColors } from '@/lib/mtfEntryBand';
-import { reasonLabel } from '@/components/mtf/types';
+import { MTFEntryBandVetoes } from '@/components/mtf/MTFEntryBandVetoes';
 import { number, patternLabels, type ChartData, type Timeframe, type Preferences, type Presentation, visibleMarks } from '@/components/mtf/types';
 
 const COLORS = {
@@ -410,7 +410,7 @@ export function MTFCandlestickChart({ data, timeframe, preferences, config, onPr
       {bandAvailable ? <>
         <div className="mtf-entry-band-prices"><b>{formatPrice(band!.low!)} — {formatPrice(band!.high!)}</b><button onClick={()=>setFitBand(!fitBand)} aria-pressed={fitBand}>{fitBand?'Restaurar enquadramento':'Enquadrar faixa'}</button></div>
         <p>Suporte: {formatPrice(band!.support_low!)} — {formatPrice(band!.support_high!)} · proximidade: {number(band!.proximity_atr,2)} × ATR do {(band?.timeframe ?? '1h').toUpperCase()}.</p>
-        {band?.vetoes.map(v=><p key={v}>Veto: {reasonLabel(v,config)}.</p>)}
+        <MTFEntryBandVetoes analysis={data.analysis} presentation={config}/>
         {band?.state==='CONFIRMED' && band.entry!=null && <p>Entrada confirmada para simulação: {formatPrice(band.entry)}.</p>}
         <p>Faixa da avaliação de {date(Date.parse(band!.evaluated_at)/1000)}, válida até {date(Date.parse(band!.valid_until)/1000)}. Guia atual de proximidade; não representa entradas históricas nem aprovação de todos os preços da faixa.</p>
       </> : <p>{band?.reason==='NO_SUPPORT'?'Sem suporte confirmado selecionado pela análise.':'Sem avaliação atual válida para desenhar a faixa.'}</p>}

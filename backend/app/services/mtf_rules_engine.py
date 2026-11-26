@@ -36,26 +36,38 @@ def operand(op, values, series, cutoff, *, preview_at=None):
     return scalar(value), None
 
 
-def evaluate_group(root, values, series, cutoff, *, role="required", preview_at=None):
+def evaluate_group(root, values, series, cutoff, *, role="required", preview_at=None, trace=None):
     checks = []
 
-    def visit(node):
+    def sample(point):
+        if point is None:
+            return None
+        return {key: point.get(key) for key in
+                ("timeframe", "close_at", "valid_until", "configuration", "window")}
+
+    def visit(node, branch):
+        def finish(state):
+            branch["state"] = state
+            return state
         if not isinstance(node, Condition):
-            states = [visit(child) for child in node.conditions]
+            branch.update(logic=node.logic, children=[{} for _ in node.conditions])
+            states = [visit(child, child_branch) for child, child_branch in
+                      zip(node.conditions, branch["children"])]
             states = [x for x in states if x != "DISABLED"]
             # Unknown inputs stay unknown even within OR: missing is never approval.
             if not states:
-                return "DISABLED"
+                return finish("DISABLED")
             if "UNAVAILABLE" in states:
-                return "UNAVAILABLE"
+                return finish("UNAVAILABLE")
             passed = (
                 all(x == "PASS" for x in states)
                 if node.logic == "AND"
                 else any(x == "PASS" for x in states)
             )
-            return "PASS" if passed else "FAIL"
+            return finish("PASS" if passed else "FAIL")
+        branch["check_id"] = node.id
         a, point = operand(node.left, values, series, cutoff, preview_at=preview_at)
-        b, _ = operand(
+        b, right_point = operand(
             node.right,
             values,
             series,
@@ -82,12 +94,14 @@ def evaluate_group(root, values, series, cutoff, *, role="required", preview_at=
                         and point["close_at"] - prior["close_at"]
                         == DURATIONS[point["timeframe"]]
                     ):
-                        pa, _ = operand(node.left, values, series, prior["close_at"])
-                        pb, _ = operand(node.right, values, series, prior["close_at"])
+                        pa, previous_left = operand(node.left, values, series, prior["close_at"])
+                        pb, previous_right = operand(node.right, values, series, prior["close_at"])
                         previous = {
                             "actual": pa,
                             "expected": pb,
                             "close_at": prior["close_at"],
+                            "left_sample": sample(previous_left),
+                            "right_sample": sample(previous_right),
                         }
                         if pa is not None and pb is not None:
                             passed = (
@@ -126,8 +140,9 @@ def evaluate_group(root, values, series, cutoff, *, role="required", preview_at=
                 right=node.right.model_dump(exclude_none=True),
                 configuration=point.get("configuration") if point else None,
                 previous=previous,
+                operand_samples={"left": sample(point), "right": sample(right_point)},
             )
         )
-        return state
+        return finish(state)
 
-    return visit(root), checks
+    return visit(root, trace if trace is not None else {}), checks
