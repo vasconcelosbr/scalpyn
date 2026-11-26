@@ -7,6 +7,16 @@
   },
   "required_features": [
     {
+      "id": "watchlist-complete-asset-diagnostic",
+      "description": "Owned read-only per-asset diagnostics preserve every producer/timeframe, frozen decision evidence and complete JSON export across pipeline levels.",
+      "files": [
+        {"path":"backend/app/services/watchlist_asset_diagnostic.py","contains_all":["WATCHLIST_ASSET_DIAGNOSTIC_V1","PipelineWatchlist.user_id == user_id","execution_authority=False"]},
+        {"path":"backend/tests/test_watchlist_asset_diagnostic.py","contains_all":["test_owned_complete_snapshot_and_rejected_only_asset","test_unknown_watchlist_stops_before_reading_market_or_private_evidence"]},
+        {"path":"frontend/app/watchlist/[watchlistId]/[symbol]/page.tsx","contains_all":["Exportar JSON completo","diagnosticMetrics"]},
+        {"path":"frontend/lib/watchlistDiagnostic.test.ts","contains_all":["complete export preserves null, zero, false","every level and decision state links"]}
+      ]
+    },
+    {
       "id": "mtf-observer-no-rate-bucket-starvation",
       "description": "Beat controls Shadow monitor cadence without holding shared prefetch capacity; MTF lifecycle distinguishes queue wait and expiry from execution.",
       "files": [

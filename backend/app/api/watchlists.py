@@ -2641,6 +2641,14 @@ async def _resolve_and_persist(
 
 # ── Assets endpoint ────────────────────────────────────────────────────────────
 
+@router.get("/{watchlist_id}/assets/{symbol}/diagnostic")
+async def get_watchlist_asset_diagnostic(watchlist_id: UUID, symbol: str, response: Response,
+    user_id: UUID = Depends(get_current_user_id), db: AsyncSession = Depends(get_db)):
+    from ..services.watchlist_asset_diagnostic import diagnostic
+    response.headers['Cache-Control'] = 'private, no-store'
+    return await diagnostic(db, user_id=user_id, watchlist_id=watchlist_id, symbol=symbol)
+
+
 @router.get("/{watchlist_id}/assets")
 async def get_watchlist_assets(
     watchlist_id: UUID,
