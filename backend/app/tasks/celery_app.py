@@ -638,7 +638,11 @@ TASK_ANNOTATIONS = {
         **_EXECUTION_GUARDS,
         "time_limit": 300,
         "soft_time_limit": 270,
-        "rate_limit": "12/h",
+        # MTF_OBSERVER_NO_RATE_BUCKET_STARVATION: beat owns this cadence.
+        # A delayed monitor can occupy the sole prefetch slot in Celery's
+        # rate bucket while the pool is idle, expiring MTF tasks behind it.
+        # Keep bounded execution/expiry and the configured beat interval.
+        "rate_limit": None,
         **_NO_REQUEUE_ON_WORKER_LOSS,
     },
     # Bloco A.3 — hourly sweep for shadow_monitor_mode='BATCH' Shadows.
@@ -1249,3 +1253,4 @@ from . import task_dispatch as _task_dispatch  # noqa: E402
 _task_dispatch.install_signal_handlers()
 
 from . import ohlcv_task_telemetry as _ohlcv_task_telemetry  # noqa: E402,F401
+from . import mtf_task_telemetry as _mtf_task_telemetry  # noqa: E402,F401

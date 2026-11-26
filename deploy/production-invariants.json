@@ -7,6 +7,15 @@
   },
   "required_features": [
     {
+      "id": "mtf-observer-no-rate-bucket-starvation",
+      "description": "Beat controls Shadow monitor cadence without holding shared prefetch capacity; MTF lifecycle distinguishes queue wait and expiry from execution.",
+      "files": [
+        {"path":"backend/app/tasks/celery_app.py","contains_all":["MTF_OBSERVER_NO_RATE_BUCKET_STARVATION", "from . import mtf_task_telemetry"]},
+        {"path":"backend/app/tasks/mtf_task_telemetry.py","contains_all":["receive_to_start_seconds", "queue_wait_seconds", "expired=expired"]},
+        {"path":"backend/tests/test_mtf_queue_starvation.py","contains_all":["test_monitor_cannot_hold_prefetch_in_a_rate_bucket", "assert run.rate_limit is None", "test_mtf_lifecycle_distinguishes_wait_execution_and_expiry"]}
+      ]
+    },
+    {
       "id": "mtf-frozen-diagnostic-explanations",
       "description": "MTF vetoes identify their frozen checks; technical explanations preserve parameters, operand timeframes, E/OU groups and structural evidence without changing decisions.",
       "files": [
