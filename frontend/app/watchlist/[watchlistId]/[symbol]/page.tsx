@@ -5,7 +5,7 @@ import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Download, RefreshCw, Search, Database, ChevronDown } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
-import { Diagnostic, Json, diagnosticMetrics, diagnosticTime as date, exportDiagnostic, object, text } from '@/lib/watchlistDiagnostic';
+import { Diagnostic, Json, diagnosticClassification, diagnosticMetrics, diagnosticTime as date, exportDiagnostic, object, text } from '@/lib/watchlistDiagnostic';
 
 const labels: Record<string, string> = {
   pipeline_asset: 'Registro do ativo na watchlist', pipeline_rejections: 'Rejeições e condições avaliadas',
@@ -61,10 +61,7 @@ export default function AssetDiagnosticPage() {
   }
   const market = object(data?.sources.market_metadata);
   const asset = object(data?.sources.pipeline_asset);
-  const classification = object(data?.sources.profile_classification);
-  const snapshot = object(asset.analysis_snapshot);
-  const decisionState = classification.status ?? snapshot.status ??
-    (Array.isArray(data?.sources.pipeline_rejections) && data.sources.pipeline_rejections.length ? 'rejected' : data?.sources.pipeline_asset ? 'approved' : null);
+  const decisionState = diagnosticClassification(data);
   const price = asset.current_price ?? market.price;
   const stateLabels: Record<string, string> = { approved: 'Aprovado', rejected: 'Rejeitado', awaiting_data: 'Aguardando dados' };
 

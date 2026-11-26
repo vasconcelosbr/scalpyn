@@ -3,7 +3,19 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { WatchlistDecisionTable, type WatchlistDecisionItem } from '../components/watchlist/RejectedAssetTable';
-import { Diagnostic, diagnosticHref, diagnosticMetrics, diagnosticTime, exportDiagnostic, text } from './watchlistDiagnostic';
+import { Diagnostic, diagnosticClassification, diagnosticHref, diagnosticMetrics, diagnosticTime, exportDiagnostic, text } from './watchlistDiagnostic';
+
+test('a newer rejection supersedes retained approval; canonical pending and unknown ordering stay explicit', () => {
+  const data = {sources:{pipeline_asset:{refreshed_at:'2026-11-26T19:06:36Z',analysis_snapshot:{status:'approved'}},
+    pipeline_rejections:[{recorded_at:'2026-11-26T19:26:45Z'}]}} as unknown as Diagnostic;
+  assert.equal(diagnosticClassification(data),'rejected');
+  data.sources.pipeline_asset = {refreshed_at:'2026-11-26T19:30:00Z',analysis_snapshot:{status:'approved'}};
+  assert.equal(diagnosticClassification(data),'approved');
+  data.sources.pipeline_asset = {analysis_snapshot:{status:'approved'}};
+  assert.equal(diagnosticClassification(data),null);
+  data.sources.profile_classification = {status:'awaiting_data'};
+  assert.equal(diagnosticClassification(data),'awaiting_data');
+});
 
 test('diagnostic source times retain seconds in the display timezone and handle missing dates', () => {
   const formatted = diagnosticTime('2026-11-26T12:22:33Z');

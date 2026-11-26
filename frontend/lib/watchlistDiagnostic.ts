@@ -16,6 +16,24 @@ export type Metric = { name: string; value: Json; timeframe: string; source: str
 export const object = (v: Json | undefined): Record<string, Json> =>
   v && typeof v === 'object' && !Array.isArray(v) ? v : {};
 export const text = (v: Json | undefined): string => v == null ? 'Não disponível' : typeof v === 'object' ? JSON.stringify(v) : String(v);
+export function diagnosticClassification(data: Diagnostic | null): string | null {
+  if (!data) return null;
+  const canonical = object(data.sources.profile_classification);
+  if (typeof canonical.status === 'string') return canonical.status;
+  const asset = object(data.sources.pipeline_asset);
+  const snapshot = object(asset.analysis_snapshot);
+  const rejections = data.sources.pipeline_rejections;
+  if (Array.isArray(rejections) && rejections.length) {
+    if (!data.sources.pipeline_asset) return 'rejected';
+    const approvalTime = typeof asset.refreshed_at === 'string' ? Date.parse(asset.refreshed_at) : NaN;
+    const rejectionTimes = rejections.map(r => object(r).recorded_at)
+      .map(t => typeof t === 'string' ? Date.parse(t) : NaN);
+    // Membership may retain an old approval. Never let it hide a newer rejection.
+    if (!Number.isFinite(approvalTime) || rejectionTimes.some(t => !Number.isFinite(t))) return null;
+    if (Math.max(...rejectionTimes) >= approvalTime) return 'rejected';
+  }
+  return typeof snapshot.status === 'string' ? snapshot.status : data.sources.pipeline_asset ? 'approved' : null;
+}
 export function diagnosticHref(watchlistId: string, symbol: string) {
   return `/watchlist/${encodeURIComponent(watchlistId)}/${encodeURIComponent(symbol)}`;
 }
