@@ -1,4 +1,10 @@
+import { formatDateTime } from './datetime';
+
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
+export function diagnosticTime(value: string | null | undefined): string {
+  if (!value || !Number.isFinite(new Date(value).getTime())) return 'Horário não disponível';
+  return formatDateTime(value, { year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', timeZoneName:'short' });
+}
 export type Diagnostic = {
   schema_version: string; captured_at: string; symbol: string;
   watchlist: { id: string; name: string; level: string; market_mode: string; profile_id: string | null; last_scanned_at: string | null };

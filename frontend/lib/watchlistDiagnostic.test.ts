@@ -3,7 +3,15 @@ import test from 'node:test';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { WatchlistDecisionTable, type WatchlistDecisionItem } from '../components/watchlist/RejectedAssetTable';
-import { Diagnostic, diagnosticHref, diagnosticMetrics, exportDiagnostic, text } from './watchlistDiagnostic';
+import { Diagnostic, diagnosticHref, diagnosticMetrics, diagnosticTime, exportDiagnostic, text } from './watchlistDiagnostic';
+
+test('diagnostic source times retain seconds in the display timezone and handle missing dates', () => {
+  const formatted = diagnosticTime('2026-11-26T12:22:33Z');
+  assert.match(formatted,/26\/11\/2026/);
+  assert.match(formatted,/09:22:33/);
+  assert.equal(diagnosticTime(null),'Horário não disponível');
+  assert.equal(diagnosticTime('invalid'),'Horário não disponível');
+});
 
 test('complete export preserves null, zero, false, nested evidence and every source', () => {
   const data = { schema_version:'WATCHLIST_ASSET_DIAGNOSTIC_V1', sources: {
