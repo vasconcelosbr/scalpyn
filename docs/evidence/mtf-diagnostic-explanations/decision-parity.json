@@ -1,0 +1,260 @@
+{
+  "source": "66f77aea804868e80e1a7e28af59efd7f8dc42cc",
+  "fixture": "Synthetic TEST_USDT / setup_frames; no real market observations",
+  "cases": 36,
+  "mismatches": 0,
+  "results": [
+    {
+      "complete": false,
+      "audit": false,
+      "btc": "UP",
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": false,
+      "btc": "UP",
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": false,
+      "btc": "UP",
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": false,
+      "btc": "DOWN",
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": false,
+      "btc": "DOWN",
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": false,
+      "btc": "DOWN",
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": false,
+      "btc": null,
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": false,
+      "btc": null,
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": false,
+      "btc": null,
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": true,
+      "btc": "UP",
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": true,
+      "btc": "UP",
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": true,
+      "btc": "UP",
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": true,
+      "btc": "DOWN",
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": true,
+      "btc": "DOWN",
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": true,
+      "btc": "DOWN",
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": true,
+      "btc": null,
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": true,
+      "btc": null,
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": false,
+      "audit": true,
+      "btc": null,
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": false,
+      "btc": "UP",
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": false,
+      "btc": "UP",
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": false,
+      "btc": "UP",
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": false,
+      "btc": "DOWN",
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": false,
+      "btc": "DOWN",
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": false,
+      "btc": "DOWN",
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": false,
+      "btc": null,
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": false,
+      "btc": null,
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": false,
+      "btc": null,
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": true,
+      "btc": "UP",
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": true,
+      "btc": "UP",
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": true,
+      "btc": "UP",
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": true,
+      "btc": "DOWN",
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": true,
+      "btc": "DOWN",
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": true,
+      "btc": "DOWN",
+      "spread": null,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": true,
+      "btc": null,
+      "spread": 0.01,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": true,
+      "btc": null,
+      "spread": 0.9,
+      "mismatches": []
+    },
+    {
+      "complete": true,
+      "audit": true,
+      "btc": null,
+      "spread": null,
+      "mismatches": []
+    }
+  ]
+}

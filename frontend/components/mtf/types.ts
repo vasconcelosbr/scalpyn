@@ -21,17 +21,43 @@ export interface Zone { type: string; low: number; high: number; touches: number
 export interface Frame { candles: Candle[]; indicators: Record<string, Point[]>; patterns: Pattern[]; pivots: Pivot[]; patterns_removed?: [number,string][]; pivots_removed?: [number,string][]; zones?: Zone[]; warmup?: {reason: string | null}; window_start?: number; error?: string | null; stale: boolean; source: string }
 export interface Plan { side: string; entry_type: string; entry: number; stop: number; tp1: number; tp2: number; rr_net: number; rr_gross: number; quantity: number; notional_usdt: number; expires_at: string; expires_after_candles: number }
 export type DiagnosticState = 'PASS' | 'FAIL' | 'DISABLED' | 'UNAVAILABLE' | 'WAITING';
+export interface DiagnosticWindow { start_at: number|string|null; end_at: number|string|null; candle_count: number|null; scope?:'analysis_history'|'indicator_sample' }
+export interface DiagnosticInput {
+  ref?: string|null; constant?: unknown; timeframe?: Timeframe|null; close_at?: number|null;
+  valid_until?: number|null; configuration?: IndicatorInstance|null; window?: DiagnosticWindow|null;
+  parameters?: Record<string,unknown>; method?: string;
+}
+export interface RuleTrace { state: DiagnosticState; check_id?: string; logic?: 'AND'|'OR'; children?: RuleTrace[] }
+export interface CheckExplanation {
+  version: 'mtf_check_explanation_v1'; description: string; method: string;
+  parameters: Record<string,unknown>; timeframes: Timeframe[]; window?: DiagnosticWindow;
+  domain?: string; operational_timeframe?: Timeframe|null;
+  inputs?: {left: DiagnosticInput; right: DiagnosticInput};
+  source_symbol?: string|null; source?: string|null;
+  evidence?: {direction?: string|null; intact?: boolean|null; broken_at?: number|null; complete?:boolean;
+    last_break?: {at:number; pivot:Pivot; close:number}|null; pivots?: Pivot[]; closed_at?: number|null;
+    reference_candle?: {open_at:string; close_at:string; close:number}|null; reason?: string|null};
+}
+export interface DiagnosticContext {
+  version: string; cutoff: number; symbol: string; mode:'CLOSED'|'PREVIEW';
+  source?: string|null; config_hash?: string; observed_at?: string;
+}
 export interface TriggerCheck {
   id: string; label: string; actual: number | string | boolean | null;
   operator: string; expected: number | string | boolean | number[] | null; unit: string;
   role: 'required' | 'veto' | 'score' | 'context'; timeframe: Timeframe | null;
   state: DiagnosticState; gap: number | null; note: string | null;
   points?: number; maximum_points?: number;
+  explanation?: CheckExplanation; rule_tree?: RuleTrace;
+  left?: RuleOperand; right?: RuleOperand; configuration?: IndicatorInstance|null;
+  previous?: {actual:number|string|boolean|null; expected:number|string|boolean|null; close_at:number;
+    left_sample?: DiagnosticInput|null; right_sample?: DiagnosticInput|null}|null;
 }
 export interface TriggerDiagnostics {
   version: 'mtf_trigger_diagnostics_v1'; status: MTFStatus;
   candle_close_at_utc?: string | null; observed_at_utc?: string; config_hash?: string;
   checks: TriggerCheck[];
+  explanation_context?: DiagnosticContext;
   patterns: { pattern: string; state: DiagnosticState; conditions: TriggerCheck[] }[];
 }
 export interface StageTimeframes { structure: Timeframe; zone: Timeframe; trigger: Timeframe }
@@ -176,6 +202,16 @@ export function visibleMarks(frame: Frame, config: Presentation, preferences: Pr
 // RISK_AUDIT vetoes carry the full check id after the prefix ("RISK_AUDIT:audit:zone_alignment").
 // The frozen audit checks hold the backend label, timeframe and state, so each veto names
 // the check that failed instead of collapsing into a generic "(AUDIT)".
+export const diagnosticTitles: Record<string,string> = {
+  btc_downtrend: 'Tendência estrutural do Bitcoin',
+  'rules:GATILHO': 'Condições do gatilho de entrada',
+  'rules:ARMADO': 'Condições para armar a entrada',
+  'audit:structure_alignment': 'Direção da estrutura principal',
+  'audit:zone_alignment': 'Direção estrutural do período da zona',
+  'audit:structure_integrity': 'Integridade da estrutura principal',
+  'audit:zone_integrity': 'Integridade da estrutura do período da zona',
+};
+export const diagnosticTitle = (row: Pick<TriggerCheck,'id'|'label'>) => diagnosticTitles[row.id] ?? row.label;
 export function reasonLabel(code: string, config?: Presentation, checks?: TriggerCheck[]) {
   const sep = code.indexOf(':');
   const key = sep < 0 ? code : code.slice(0, sep);
@@ -183,9 +219,10 @@ export function reasonLabel(code: string, config?: Presentation, checks?: Trigge
   if (key === 'RISK_AUDIT' && suffix) {
     const title = config?.reason_labels[key] ?? 'Auditoria de risco';
     const check = checks?.find(c => c.id === suffix);
-    if (!check) return `${title}: verificação não atendida`;
+    if (!check) return `${title}: ${diagnosticTitles[suffix] ?? 'verificação'} — detalhes indisponíveis nesta avaliação`;
     const tf = check.timeframe ? ` · ${check.timeframe.toUpperCase()}` : '';
-    return `${title}: ${check.label}${tf} — ${check.state === 'UNAVAILABLE' ? 'dado indisponível' : 'reprovado'}`;
+    const states: Record<DiagnosticState,string> = {PASS:'atendido',FAIL:'reprovado',UNAVAILABLE:'dado indisponível',WAITING:'aguardando',DISABLED:'desativado'};
+    return `${title}: ${diagnosticTitle(check)}${tf} — ${states[check.state]}`;
   }
   const label = config?.reason_labels[key] ?? (key === 'INVALID_PLAN' ? 'Plano inválido: entrada, stop ou risco inconsistente' : 'Condição de análise indisponível');
   return suffix ? `${label} (${suffix.toUpperCase()})` : label;

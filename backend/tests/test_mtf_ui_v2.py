@@ -66,8 +66,10 @@ async def test_display_warmup_covers_visible_series_without_changing_engine(monk
     expected=evaluate('BTC_USDT',frames,cfg,now,.01,trend(frames['4h']['pivots']))
     result=await service.chart_data(object(),'user','BTC_USDT',None,cfg)
     from app.services.mtf_trigger_diagnostics import finalize_diagnostics
-    # Diagnostic freshness/identity are finalized by the service, after engine evaluation.
-    expected.update({key:result['analysis'][key] for key in ('observed_at_utc','config_hash','data_errors')})
+    # The service supplies provenance and BTC evidence before finalizing diagnostics.
+    # Keep the entire diagnostic comparison, including this additive metadata.
+    expected.update({key:deepcopy(result['analysis'][key]) for key in
+                     ('observed_at_utc','config_hash','data_errors','source','btc_context')})
     finalize_diagnostics(expected,cfg,now,now)
     for key,value in expected.items(): assert result['analysis'][key]==value,key
     for tf,frame in result['frames'].items():
@@ -85,6 +87,7 @@ async def test_display_warmup_covers_visible_series_without_changing_engine(monk
     observer=await service.chart_data(object(),'user','BTC_USDT',None,cfg,include_display=False)
     expected['observed_at_utc'] = observer['analysis']['observed_at_utc']
     expected['trigger_diagnostics']['observed_at_utc'] = observer['analysis']['observed_at_utc']
+    expected['trigger_diagnostics']['explanation_context']['observed_at'] = observer['analysis']['observed_at_utc']
     for key,value in expected.items(): assert observer['analysis'][key]==value,key
     assert all(limit == cfg.candle_limits[tf] for tf,limit in requested)
     assert service.profile_context.await_args.args[-1] is False

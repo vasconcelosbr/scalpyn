@@ -204,6 +204,7 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         "score": {"total": 0, "raw": None, "maximum": sum(cfg.score_weights.values()), "components": {}, "calibrated": False},
         "vetoes": [], "status": "NO_TRADE", "explanation": []}
     from .mtf_trigger_diagnostics import build_diagnostics
+    from .mtf_diagnostic_explanations import explain_diagnostics
     vetoes = result["vetoes"]
     closed_5m = frames.get(trigger_tf, {}).get("candles", [])
     if closed_5m:
@@ -222,6 +223,7 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         if cfg.context_audit.enabled:
             result['risk_audit'] = {'version': 'mtf_context_risk_v1', 'status': 'BLOCK', 'checks': [],
                                     'reasons': list(vetoes), 'confirmed_at': as_of, 'preview': preview_at is not None}
+        explain_diagnostics(result, frames, cfg, as_of, preview=preview_at is not None)
         return result
     f4, f1, f5 = (frames[tf] for tf in (structure_tf, zone_tf, trigger_tf))
     c = f5["candles"][-1]
@@ -283,10 +285,12 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         values['flow']['capital'] = {tf: reading if reading.get('state') != 'unavailable' else {}
             for tf, reading in (flow or {}).get('capital', {}).items()}
         def run(root, role, key, points=None):
-            state, checks = evaluate_group(root, values, rule_series or {}, as_of, role=role, preview_at=preview_at)
+            trace = {}
+            state, checks = evaluate_group(root, values, rule_series or {}, as_of, role=role, preview_at=preview_at, trace=trace)
             rule_checks.extend(checks)
             from .mtf_trigger_diagnostics import check
             row = check('rules:'+key, key, None if state=='UNAVAILABLE' else state=='PASS', '=', role!='veto', role=role, enabled=state!='DISABLED')
+            row['rule_tree'] = trace
             if points is not None: row.update(points=points if state=='PASS' else 0, maximum_points=points)
             group_checks.append(row)
             if state == 'UNAVAILABLE': vetoes.append('RULE_DATA_UNAVAILABLE:'+checks[0]['id'])
@@ -372,6 +376,7 @@ def evaluate(symbol: str, frames: dict, cfg: MTFChartConfig, as_of: int, spread_
         result['explanation'].insert(0, 'Regras JSON: ARMADO '+str(armed)+'; GATILHO '+str(confirmed)+'.')
     from .mtf_risk_audit import finalize
     finalize(result, frames, cfg, as_of, preview=preview_at is not None)
+    explain_diagnostics(result, frames, cfg, as_of, preview=preview_at is not None)
     return result
 
 

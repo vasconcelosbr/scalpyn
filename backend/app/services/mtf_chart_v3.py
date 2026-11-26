@@ -70,8 +70,9 @@ def calculate_frames(raw, cfg, cutoff, *, forming_at=None):
                         window=instance.sample_window,
                         epoch_seconds=True,
                     )
-                valid_times = {
-                    c["time"]
+                valid_windows = {
+                    c["time"]: dict(start_at=candles[index + 1 - instance.sample_window]["time"],
+                                    end_at=c["time"] + DURATIONS[tf], candle_count=instance.sample_window, scope="indicator_sample")
                     for index, c in enumerate(candles)
                     if index + 1 >= instance.sample_window
                     and c["time"] - candles[index + 1 - instance.sample_window]["time"]
@@ -80,7 +81,7 @@ def calculate_frames(raw, cfg, cutoff, *, forming_at=None):
                 points = [
                     p
                     for p in grouped[group].get(instance.output, [])
-                    if p["time"] in valid_times
+                    if p["time"] in valid_windows
                 ]
                 configuration = instance.model_dump()
                 series["indicators." + key] = [
@@ -91,6 +92,7 @@ def calculate_frames(raw, cfg, cutoff, *, forming_at=None):
                         valid_until=p["time"]
                         + DURATIONS[tf] * (1 + cfg.stale_tf_multiplier),
                         configuration=configuration,
+                        window=valid_windows[p["time"]],
                     )
                     for p in points
                 ]
@@ -247,6 +249,10 @@ async def chart_data_v3(db, uid, symbol, profile_id, cfg, include_display):
         btc_trend_timeframe=cfg.btc_trend_timeframe,
         btc_context={
             "version": "mtf_btc_context_v1",
+            "symbol": "BTC_USDT", "source": "gate.io", "market_type": "spot",
+            "evaluated_at": iso(cutoff),
+            "pivot_left": cfg.pivot_left, "pivot_right": cfg.pivot_right,
+            "candle_limits": {tf: cfg.candle_limits[tf] for tf in btc_frames},
             "active_timeframe": cfg.btc_trend_timeframe,
             "veto_enabled": cfg.veto_filters.btc_downtrend,
             "exempt": symbol == "BTC_USDT",
