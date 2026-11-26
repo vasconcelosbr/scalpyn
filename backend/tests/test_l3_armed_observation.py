@@ -1,4 +1,4 @@
-"""External TRIGGERED feed never changes ARMED membership or grants execution."""
+"""External ARMED feed mirrors validated membership and never grants execution."""
 import asyncio
 import copy
 import json
@@ -137,20 +137,21 @@ def test_real_database_latest_reference_and_full_universe(database, monkeypatch)
         insert('ASSET_4',at=NOW+timedelta(seconds=1),state='ARMED',id=UUID(int=1))
         insert('ASSET_5',at=NOW+timedelta(seconds=2),state='NO_TRADE')  # Future row excluded.
         display=await service.load_l3_armed_display(adapter,user_id=uid,include_analysis=True)
-        external=await service.load_l3_triggered_assets(adapter,user_id=uid)
+        external=await service.load_l3_armed_assets(adapter,user_id=uid)
         assert display['total']==125 and display['armed_count']==121
         assert display['analyses']['ASSET_0']['status']=='WAIT'
         assert display['analyses']['ASSET_4']['status']=='NO_TRADE'
         assert display['analyses']['ASSET_5']['status']=='ARMED'
         assert 'ASSET_1' not in display['analyses']  # Changed reference cannot leak an old ARMED into the chart.
-        assert {s for s,a in display['analyses'].items() if a['status']=='TRIGGERED'} == {i['symbol'] for i in external['items']}
+        assert {s for s,a in display['analyses'].items() if a['status']=='ARMED'} == {i['symbol'] for i in external['items']}
         assert 'analyses' not in first and 'analyses' not in external
-        assert {i['symbol'] for i in external['items']}=={'ASSET_2'}
-        assert external['total']==1
-        assert external['observation_contract']=='L3_TRIGGERED_OBSERVATION_V1'
-        assert external['semantic']=='MTF_TRIGGERED_PROFILE_REFERENCE'
+        assert {i['symbol'] for i in external['items']}=={i['symbol'] for i in display['armed_items']}
+        assert not {'ASSET_0','ASSET_1','ASSET_2','ASSET_4'} & {i['symbol'] for i in external['items']}
+        assert external['total']==121
+        assert external['observation_contract']=='L3_ARMED_OBSERVATION_V2'
+        assert external['semantic']=='MTF_ARMED_PROFILE_REFERENCE'
         assert external['executable'] is external['execution_authority'] is False
-        assert all(i['status']=='TRIGGERED' and i['profile_status']=='approved' and not i['executable'] for i in external['items'])
+        assert all(i['status']=='ARMED' and i['profile_status']=='approved' and not i['executable'] for i in external['items'])
         assert all('authorization_id' not in i and 'shadow_id' not in i for i in external['items'])
         assert base['items']==items and all('mtf' not in i for i in items)
     asyncio.run(run())
@@ -158,11 +159,12 @@ def test_real_database_latest_reference_and_full_universe(database, monkeypatch)
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('states,expected', [
-    (['ARMED', 'WAIT', 'NO_TRADE', None], []),
-    (['ARMED', 'TRIGGERED', None, 'TRIGGERED'], ['ASSET_1', 'ASSET_3']),
+    (['ARMED', 'WAIT', 'NO_TRADE', None], ['ASSET_0']),
+    (['ARMED', 'TRIGGERED', None, 'ARMED'], ['ASSET_0', 'ASSET_3']),
+    (['TRIGGERED', 'WAIT', 'NO_TRADE', None], []),
     ([], []),
 ])
-async def test_external_feed_selects_only_current_triggers(monkeypatch, states, expected):
+async def test_external_feed_selects_only_current_armeds(monkeypatch, states, expected):
     items = [dict(symbol=f'ASSET_{n}', status='approved', executable=False,
                   execution_authority=False, mtf={'status':state}) for n,state in enumerate(states)]
     display = dict(items=items, armed_items=[i for i in items if i['mtf']['status']=='ARMED'],
@@ -171,10 +173,10 @@ async def test_external_feed_selects_only_current_triggers(monkeypatch, states, 
     loader = AsyncMock(return_value=display)
     monkeypatch.setattr(service, 'load_l3_armed_display', loader)
     uid = uuid4()
-    result = await service.load_l3_triggered_assets(object(), user_id=uid)
+    result = await service.load_l3_armed_assets(object(), user_id=uid)
     assert [i['symbol'] for i in result['items']] == expected
     assert result['total'] == len(expected)
-    assert all(i['status']=='TRIGGERED' and i['profile_status']=='approved' for i in result['items'])
+    assert all(i['status']=='ARMED' and i['profile_status']=='approved' for i in result['items'])
     assert result['execution_authority'] is result['executable'] is False
     assert loader.await_args.kwargs['user_id'] == uid
     assert display == original
@@ -185,7 +187,7 @@ async def test_internal_observer_never_calls_filtered_external_feed(monkeypatch)
     from app.api import watchlists
     from app.services import mtf_chart_service
     legacy=AsyncMock(return_value={'items':[{'symbol':'WAIT_USDT'}]})
-    external=AsyncMock(side_effect=AssertionError('would restrict observation to TRIGGERED'))
+    external=AsyncMock(side_effect=AssertionError('would restrict observation to ARMED'))
     monkeypatch.setattr(watchlists,'load_l3_internal_candidates',legacy)
     monkeypatch.setattr(watchlists,'list_l3_consolidated_assets',external)
     assert await mtf_chart_service.members(object(),uuid4(),'l3-consolidated') == [{'symbol':'WAIT_USDT'}]
@@ -200,9 +202,19 @@ def test_existing_external_url_is_authenticated_read_only(monkeypatch):
     url='/api/watchlists/l3-consolidated/assets'
     assert http.get(url).status_code in (401,403)
     uid=uuid4();app.dependency_overrides[watchlists.get_current_user_id]=lambda:uid
-    loader=AsyncMock(return_value={'items':[],'total':0,'executable':False,'execution_authority':False})
-    monkeypatch.setattr(service,'load_l3_triggered_assets',loader)
+    armed=dict(symbol='ARMED_USDT',status='approved',mtf={'status':'ARMED'},
+               executable=False,execution_authority=False)
+    triggered=dict(symbol='TRIGGERED_USDT',status='approved',mtf={'status':'TRIGGERED'},
+                   executable=False,execution_authority=False)
+    loader=AsyncMock(return_value={'items':[armed,triggered],'armed_items':[armed],
+                                 'as_of':NOW.isoformat()})
+    monkeypatch.setattr(service,'load_l3_armed_display',loader)
     response=http.get(url)
-    assert response.status_code==200 and response.json()['items']==[]
+    assert response.status_code==200
+    payload=response.json()
+    assert payload['total']==1
+    assert [i['symbol'] for i in payload['items']]==['ARMED_USDT']
+    assert payload['items'][0]['status']=='ARMED'
+    assert payload['observation_contract']=='L3_ARMED_OBSERVATION_V2'
     assert response.headers['cache-control']=='private, no-store'
     assert loader.await_args.kwargs['user_id']==uid

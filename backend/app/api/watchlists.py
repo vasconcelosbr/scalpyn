@@ -1192,15 +1192,15 @@ async def list_l3_consolidated_assets(
     db: AsyncSession = Depends(get_db),
     response: Response = None,
 ):
-    """L3_TRIGGERED_OBSERVATION_V1: existing external URL, observational TRIGGERED only."""
-    from ..services.l3_armed_observation import load_l3_triggered_assets
+    """L3_ARMED_OBSERVATION_V2: existing external URL, observational ARMED only."""
+    from ..services.l3_armed_observation import load_l3_armed_assets
     if response is not None:
         response.headers['Cache-Control'] = 'private, no-store'
-    return await load_l3_triggered_assets(db, user_id=user_id)
+    return await load_l3_armed_assets(db, user_id=user_id)
 
 
 async def load_l3_internal_candidates(*, user_id: UUID, db: AsyncSession):
-    """Preserve the internal observer universe independently of the public TRIGGERED feed."""
+    """Preserve the internal observer universe independently of the public ARMED feed."""
     candidates = await load_live_l3_candidates(db, user_id=user_id)
     candidates, floor_seconds = await _merge_recent_l3_shadows(db, user_id, candidates)
     items: List[Dict[str, Any]] = []
