@@ -448,4 +448,16 @@ async def run_cycle():
             except Exception:
                 await db.rollback()
                 log.exception("MTF chart cycle failed user=%s", user_id)
-    return {"evaluations_created": count, "mode": "SHADOW", "operational_effect": False}
+    # MTF_PUMP_FLOW_REVISION runs right after the evaluations it revises, in its own
+    # session: no queue, no expiry. By now the cycle is past the revision delay for
+    # this cycle's captures (or the previous cycle's, if this one ran fast), inside the
+    # freshness limit. A failure here never affects the observation above.
+    revisions = None
+    try:
+        from .mtf_pump_flow import revise_all
+        async with CeleryAsyncSessionLocal() as db:
+            revisions = await revise_all(db)
+    except Exception:
+        log.exception("MTF Pump flow revision after observation failed")
+    return {"evaluations_created": count, "pump_flow_revisions": revisions,
+            "mode": "SHADOW", "operational_effect": False}
