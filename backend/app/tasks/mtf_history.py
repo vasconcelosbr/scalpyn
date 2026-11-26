@@ -84,20 +84,6 @@ async def dispatch_pending(db):
         enqueue('app.tasks.mtf_history.capture',dedup_key='mtf-history:'+key,ttl_seconds=600,args=(key,))
 
 
-@celery_app.task(name='app.tasks.mtf_history.revise_pump_flow', acks_late=False, soft_time_limit=50, time_limit=55)
-def revise_pump_flow():
-    """MTF_PUMP_FLOW_REVISION on this dedicated observation queue: one short pass per
-    minute. It must not share a slot with the multi-minute MTF chart observation on
-    structural_compute, where a 55 s expiry made every pass expire while it ran."""
-    from .compute_indicators import _run_async
-    async def run():
-        from ..database import CeleryAsyncSessionLocal
-        from ..services.mtf_pump_flow import revise_all
-        async with CeleryAsyncSessionLocal() as db:
-            return {'pump_flow_revisions': await revise_all(db), 'operational_effect': False}
-    return _run_async(run())
-
-
 @celery_app.task(name='app.tasks.mtf_history.maintenance', acks_late=False, soft_time_limit=240, time_limit=270)
 def maintenance():
     from .compute_indicators import _run_async

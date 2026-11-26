@@ -6,7 +6,6 @@ ALLOWED = (
     'collect_research_1h_after_close', 'pump_monitor_cycle',
     'mtf_chart_after_close',
     'mtf_history_after_close', 'mtf_history_maintenance', 'mtf_replay_progress',
-    'mtf_pump_flow_revision',
 )
 
 M5_SHADOW_ALLOWED = (
