@@ -226,6 +226,7 @@ TASK_ROUTES = {
     "app.tasks.mtf_history.dispatch": {"queue": QUEUE_MTF_HISTORY},
     "app.tasks.mtf_history.capture": {"queue": QUEUE_MTF_HISTORY},
     "app.tasks.mtf_history.maintenance": {"queue": QUEUE_MTF_HISTORY},
+    "app.tasks.mtf_history.revise_pump_flow": {"queue": QUEUE_MTF_HISTORY},
     # 5m collection and calculation use separate workers to avoid queue starvation.
     "app.tasks.collect_market_data.collect_5m":  {"queue": QUEUE_MICROSTRUCTURE},
     "app.tasks.compute_indicators.compute_5m":   {"queue": QUEUE_INDICATOR_5M},
@@ -826,7 +827,7 @@ celery_app.conf.beat_schedule = {
     "mtf_replay_progress": {
         "task": "app.tasks.mtf_chart.advance_replays",
         "schedule": 60.0,
-        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE, "expires": 55},
+        "options": {"queue": QUEUE_STRUCTURAL_COMPUTE, "expires": 180},
     },
     "mtf_history_after_close": {
         "task": "app.tasks.mtf_history.dispatch",
@@ -836,7 +837,12 @@ celery_app.conf.beat_schedule = {
     "mtf_history_maintenance": {
         "task": "app.tasks.mtf_history.maintenance",
         "schedule": 60.0,
-        "options": {"queue": QUEUE_MTF_HISTORY, "expires": 55},
+        "options": {"queue": QUEUE_MTF_HISTORY, "expires": 180},
+    },
+    "mtf_pump_flow_revision": {
+        "task": "app.tasks.mtf_history.revise_pump_flow",
+        "schedule": 60.0,
+        "options": {"queue": QUEUE_MTF_HISTORY, "expires": 180},
     },
     "mtf_chart_after_close": {
         "task": "app.tasks.mtf_chart.observe",

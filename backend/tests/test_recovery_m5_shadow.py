@@ -96,3 +96,23 @@ def test_canonical_indicator_selector_never_falls_back_to_another_user(monkeypat
     monkeypatch.setenv('CANONICAL_INDICATOR_CONFIG_PROFILE_ID', 'invalid-id')
     with pytest.raises(ValueError):
         asyncio.run(load_canonical_indicator_config(db))
+
+
+def test_pump_flow_revision_runs_on_dedicated_history_queue_not_beside_chart_observation():
+    # Production finding 25/11/2026: inside advance_replays (structural_compute, 55 s
+    # expiry) every revision pass expired while the multi-minute MTF observation ran.
+    from app.tasks.celery_app import celery_app, _configured_task_modules
+    selected = observation_schedule(celery_app.conf.beat_schedule, {})
+    revision = selected['mtf_pump_flow_revision']
+    assert revision['task'] == 'app.tasks.mtf_history.revise_pump_flow'
+    # Repository backlog policy (test_beat_expires_backlog_guard): expires = max(3x interval, 60).
+    assert revision['options'] == {'queue': 'mtf_history', 'expires': 180}
+    assert celery_app.conf.task_routes['app.tasks.mtf_history.revise_pump_flow'] == {'queue': 'mtf_history'}
+    import os
+    from unittest.mock import patch
+    with patch.dict(os.environ, {'WORKER_QUEUES': 'mtf_history'}):
+        assert _configured_task_modules() == ('app.tasks.mtf_history',)
+    import app.tasks.mtf_history as history_tasks
+    assert history_tasks.revise_pump_flow.name == 'app.tasks.mtf_history.revise_pump_flow'
+    import inspect, app.tasks.mtf_chart as chart_tasks
+    assert 'revise_all' not in inspect.getsource(chart_tasks)
