@@ -3074,7 +3074,8 @@
           "contains_all": [
             "def calculate_frames",
             "mtf_indicator_identity",
-            "valid_times"
+            "valid_windows",
+            "if p[\"time\"] in valid_windows"
           ]
         },
         {
