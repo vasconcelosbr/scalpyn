@@ -5,8 +5,7 @@ import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Download, RefreshCw, Search, Database, ChevronDown } from 'lucide-react';
 import { apiFetch } from '@/lib/api';
-import { formatDateTime } from '@/lib/datetime';
-import { Diagnostic, Json, diagnosticMetrics, exportDiagnostic, object, text } from '@/lib/watchlistDiagnostic';
+import { Diagnostic, Json, diagnosticClassification, diagnosticMetrics, diagnosticTime as date, exportDiagnostic, object, text } from '@/lib/watchlistDiagnostic';
 
 const labels: Record<string, string> = {
   pipeline_asset: 'Registro do ativo na watchlist', pipeline_rejections: 'Rejeições e condições avaliadas',
@@ -15,7 +14,6 @@ const labels: Record<string, string> = {
   mtf_observation: 'Snapshot MTF da watchlist', mtf_evaluation: 'Avaliação e auditoria MTF',
   consolidated_mtf_observation: 'Snapshot MTF do consolidado',
 };
-const date = (v: string | null | undefined) => v ? formatDateTime(v) : 'Horário não disponível';
 const button = 'inline-flex items-center justify-center gap-2 rounded-lg border border-[#29354A] px-4 py-2.5 text-sm font-medium transition hover:bg-[#172235] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 disabled:opacity-50';
 
 function Evidence({ title, value, available = true }: { title: string; value: Json; available?: boolean }) {
@@ -63,10 +61,7 @@ export default function AssetDiagnosticPage() {
   }
   const market = object(data?.sources.market_metadata);
   const asset = object(data?.sources.pipeline_asset);
-  const classification = object(data?.sources.profile_classification);
-  const snapshot = object(asset.analysis_snapshot);
-  const decisionState = classification.status ?? snapshot.status ??
-    (Array.isArray(data?.sources.pipeline_rejections) && data.sources.pipeline_rejections.length ? 'rejected' : data?.sources.pipeline_asset ? 'approved' : null);
+  const decisionState = diagnosticClassification(data);
   const price = asset.current_price ?? market.price;
   const stateLabels: Record<string, string> = { approved: 'Aprovado', rejected: 'Rejeitado', awaiting_data: 'Aguardando dados' };
 
@@ -103,7 +98,7 @@ export default function AssetDiagnosticPage() {
           <select aria-label="Timeframe" value={timeframe} onChange={e => setTimeframe(e.target.value)} className="rounded-lg border border-[#29354A] bg-[#0C111A] px-3 py-2 text-sm"><option value="all">Todos os timeframes</option>{Array.from(new Set(metrics.map(m => m.timeframe))).sort().map(tf => <option key={tf}>{tf}</option>)}</select>
           <select aria-label="Fonte dos indicadores" value={source} onChange={e => setSource(e.target.value)} className="max-w-full rounded-lg border border-[#29354A] bg-[#0C111A] px-3 py-2 text-sm"><option value="all">Todas as fontes</option>{Array.from(new Set(metrics.map(m => m.source))).map(s => <option key={s}>{s}</option>)}</select>
         </div>
-        <div className="overflow-x-auto rounded-xl border border-[#253044]">
+        <div className="max-h-[65vh] overflow-auto rounded-xl border border-[#253044]">
           <table className="w-full text-left text-sm"><thead className="bg-[#111925] text-xs uppercase tracking-wider text-slate-400"><tr>{['Indicador / campo', 'Valor', 'Timeframe', 'Origem', 'Horário da fonte'].map(label => <th key={label} className="px-4 py-3 font-medium">{label}</th>)}</tr></thead>
             <tbody>{filtered.map(m => <tr key={m.path} className="border-t border-[#1B2535] hover:bg-[#101927]"><td className="max-w-sm break-words px-4 py-3 font-mono text-xs text-blue-200" title={m.path}>{m.name}</td><td className="max-w-sm break-words px-4 py-3 font-mono text-xs">{text(m.value)}</td><td className="px-4 py-3 text-slate-300">{m.timeframe}</td><td className="px-4 py-3 text-xs text-slate-400">{m.source}</td><td className="whitespace-nowrap px-4 py-3 text-xs text-slate-400">{date(m.time)}</td></tr>)}
               {!filtered.length && <tr><td colSpan={5} className="p-8 text-center text-slate-400">{metrics.length ? 'Nenhum campo corresponde aos filtros.' : 'Não há indicadores persistidos disponíveis para este ativo.'}</td></tr>}
