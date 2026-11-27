@@ -12,6 +12,7 @@ import { useConfig } from "@/hooks/useConfig";
 import {
   BREAKOUT_REFERENCE_WINDOWS,
   PROFILE_PERIOD_DEFAULTS,
+  STRATEGY_PROFILE_INDICATOR_MAP,
   indicatorOptionsForSection,
   optionsWithUnsupportedIndicator,
 } from "@/lib/indicatorCatalog";
@@ -124,7 +125,9 @@ const BLOCK_RULE_INDICATORS = indicatorOptionsForSection("block_rules");
 const ENTRY_RULE_INDICATORS = indicatorOptionsForSection("entry_triggers");
 const BLOCK_NUMERIC_RULE_INDICATORS = BLOCK_RULE_INDICATORS.filter((indicator) => indicator.kind === "number");
 const ENTRY_NUMERIC_RULE_INDICATORS = ENTRY_RULE_INDICATORS.filter((indicator) => indicator.kind === "number");
-const BLOCK_THRESHOLD_RULE_INDICATORS = blockThresholdIndicatorOptions(BLOCK_NUMERIC_RULE_INDICATORS);
+const BLOCK_THRESHOLD_RULE_INDICATORS = blockThresholdIndicatorOptions(
+  BLOCK_RULE_INDICATORS.filter((indicator) => indicator.kind === "number" || indicator.valueOptions),
+);
 const BLOCK_COMPARABLE_NUMERIC_RULE_INDICATORS = BLOCK_NUMERIC_RULE_INDICATORS.filter(
   (indicator) => indicator.value !== "breakout_distance_pct",
 );
@@ -1635,10 +1638,21 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                                 <select
                                   className="input h-8 text-[12px] min-w-[140px]"
                                   value={condition.indicator || "rsi"}
-                                  onChange={(e) => updateBlockCondition(block.id, condition.id, {
-                                    indicator: e.target.value,
-                                    reference_window: undefined,
-                                  })}
+                                  aria-label="Indicador do bloqueio"
+                                  onChange={(e) => {
+                                    const categorical = STRATEGY_PROFILE_INDICATOR_MAP.get(e.target.value)?.valueOptions;
+                                    const wasCategorical = STRATEGY_PROFILE_INDICATOR_MAP.get(condition.indicator || "")?.valueOptions;
+                                    updateBlockCondition(block.id, condition.id, {
+                                      indicator: e.target.value,
+                                      reference_window: undefined,
+                                      ...(categorical || wasCategorical ? {
+                                        operator: categorical ? "==" : "<",
+                                        value: categorical ? "" : undefined,
+                                        min: undefined,
+                                        max: undefined,
+                                      } : {}),
+                                    });
+                                  }}
                                 >
                                   {isCurrentPriceThreshold(condition) && (
                                     <option value="price" disabled>Price — use Comparison</option>
@@ -1693,11 +1707,29 @@ export function ProfileBuilder({ profile, onSave, onCancel, onProfileStatusChang
                                     });
                                   }}
                                 >
-                                  {THRESHOLD_OPERATORS.map((operator) => (
+                                  {(STRATEGY_PROFILE_INDICATOR_MAP.get(condition.indicator || "")?.valueOptions
+                                    ? ["==", "!="] : THRESHOLD_OPERATORS).map((operator) => (
                                     <option key={operator} value={operator}>{operator === "between" ? "between" : operator}</option>
                                   ))}
                                     </select>
-                                    {condition.operator === "between" ? (
+                                    {STRATEGY_PROFILE_INDICATOR_MAP.get(condition.indicator || "")?.valueOptions ? (
+                                      <select
+                                        className="input h-8 w-36 text-[12px] font-mono"
+                                        aria-label="Estado do indicador para bloqueio"
+                                        value={typeof condition.value === "string" ? condition.value : ""}
+                                        onChange={(e) => updateBlockCondition(block.id, condition.id, { value: e.target.value })}
+                                        required
+                                      >
+                                        <option value="" disabled>Selecionar estado</option>
+                                        {typeof condition.value === "string" && condition.value !== "" &&
+                                          !STRATEGY_PROFILE_INDICATOR_MAP.get(condition.indicator || "")?.valueOptions?.includes(condition.value) && (
+                                            <option value={condition.value} disabled>{condition.value} (valor importado)</option>
+                                          )}
+                                        {STRATEGY_PROFILE_INDICATOR_MAP.get(condition.indicator || "")?.valueOptions?.map(value => (
+                                          <option key={value} value={value}>{value}</option>
+                                        ))}
+                                      </select>
+                                    ) : condition.operator === "between" ? (
                                   <>
                                     <input
                                       type="number"

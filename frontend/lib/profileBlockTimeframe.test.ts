@@ -11,6 +11,26 @@ const policies = withProfileCalculationIdentities({ ohlcv: {
   timeframe: "5m", max_age_seconds: 360, candle_policy: "CLOSED_ONLY",
 } }, { adx: { period: 10 }, macd: { fast: 8, slow: 21, signal: 5 }, bollinger: { period: 18, deviation: 2.5 } });
 
+test("PSAR block states survive save/reopen with their exact candle timeframe", () => {
+  const option = indicatorOptionsForSection("block_rules").find(x => x.id === "psar_trend");
+  assert.deepEqual(option?.valueOptions, ["bearish", "bullish"]);
+  for (const value of option!.valueOptions!) {
+    const condition = { indicator: "psar_trend", operator: "==", value, type: "threshold" };
+    assert.ok(blockConditionHasTimeframe(condition));
+    const config = { default_timeframe: "5m", block_rules: { blocks: [{ timeframe: "1h", conditions: [condition] }] } };
+    const prepared = prepareProfileBlockRuleIdentities(config, policies);
+    assert.deepEqual(prepared.issues, []);
+    const saved = serializeProfileEditorConfig(prepared.config);
+    const reopened = normalizeProfileRuleCondition(saved.block_rules.blocks[0].conditions[0]);
+    assert.equal(reopened.value, value);
+    assert.equal(reopened.timeframe, "1h");
+    assert.equal(reopened.operator, "==");
+    assert.deepEqual(validateExecutionSections(saved), []);
+    saved.block_rules.blocks[0].conditions[0].value = "";
+    assert.ok(validateExecutionSections(saved).some(issue => issue.code === "VALUE_REQUIRED"));
+  }
+});
+
 test("higher highs exposes both boolean choices and preserves false through save/reopen", () => {
   const option = indicatorOptionsForSection("block_rules").find(x => x.id === "higher_highs_5");
   assert.equal(option?.kind, "boolean");

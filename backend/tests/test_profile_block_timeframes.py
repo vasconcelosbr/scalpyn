@@ -77,6 +77,30 @@ def test_missing_requested_timeframe_never_uses_flat_or_other_series():
     assert not result["blocked"] and result["skipped_blocks"] == ["test"]
 
 
+@pytest.mark.parametrize("wanted", ["bearish", "bullish"])
+@pytest.mark.parametrize("actual", ["bearish", "bullish", None])
+def test_psar_block_selector_matches_only_requested_state_and_timeframe(wanted, actual):
+    c = condition("psar_trend", "1h", period=None, operator="==", value=wanted)
+    config = profile([c])
+    assert validate_profile_execution_structure(config) == []
+    asset = {"symbol": "TEST_USDT", "psar_trend": wanted,
+             "_merged_indicators": SimpleNamespace(candidates=[
+                 candidate("psar_trend", "5m", wanted, period=None),
+                 candidate("psar_trend", "1h", actual, period=None)])}
+    result = BlockEngine(config["block_rules"]).evaluate(asset)
+    assert result["blocked"] is (actual == wanted)
+    assert bool(result["skipped_blocks"]) is (actual is None)
+    assert ProfileEngine(config).evaluate_asset(asset)["blocked"] is (actual == wanted)
+    if actual == wanted:
+        passed, rejected = evaluate_rejections([asset], profile_config=config, stage="L3", profile_id="p")
+        assert not passed and rejected
+        final = build_authorization_contract(asset=asset, profile_config=config, legacy_decision="BLOCK", evaluated_at=NOW,
+                                             profile_id="fixture", profile_name="fixture", profile_version=NOW)
+        assert final["authorization_status"] == "STRATEGY_BLOCK"
+        assert final["block_rules_audit"]["blocked"] is True
+        assert final["profile_lineage"]["rules_snapshot"]["block_rules"]["blocks"][0]["conditions"][0]["value"] == wanted
+
+
 @pytest.mark.asyncio
 async def test_exact_block_inputs_are_loaded_before_gates_reused_and_isolated(monkeypatch):
     from app.services import indicators_provider

@@ -14,6 +14,7 @@ export interface IndicatorCatalogEntry {
   /** The producer embeds its calculation period in the name, with no period/parameters metadata. */
   calculationIdentity?: "indicator_name";
   noTimeframe?: boolean;
+  valueOptions?: readonly string[];
   requiresReferenceWindow?: boolean;
   unit?: "percent";
 }
@@ -104,7 +105,7 @@ export const STRATEGY_PROFILE_INDICATORS: readonly IndicatorCatalogEntry[] = [
   entry("atr_pct", "ATR % (atr_pct)", "number", "trend", { defaultPeriod: 14, unit: "percent" }),
   entry("atr_percent", "ATR %", "number", "trend", { defaultPeriod: 14, unit: "percent" }),
   entry("bb_width", "Bollinger Width", "number", "trend", { defaultPeriod: 20, defaultParameters: { deviation: 2.0 } }),
-  entry("psar_trend", "PSAR Trend", "string", "trend", { noTimeframe: true }),
+  entry("psar_trend", "PSAR Trend (psar_trend)", "string", "trend", { valueOptions: ["bearish", "bullish"] }),
 
   entry("ema5", "EMA 5", "number", "ema", { defaultPeriod: 5 }),
   entry("ema9", "EMA 9", "number", "ema", { defaultPeriod: 9 }),
