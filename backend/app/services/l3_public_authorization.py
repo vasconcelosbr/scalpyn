@@ -190,19 +190,8 @@ async def load_public_authorizations(db, *, user_id, candidates, display_floor_s
     # The real decision's OWN outbox event already carries the accurate
     # processing_result ("SUPPRESSED/ACTIVE_TRADE_ALREADY_EXISTS" included) --
     # see l3_authorization_outbox_service.py::_process_consolidation.
-    latest = (
-        select(DecisionLog.id)
-        .where(DecisionLog.user_id == user_id,
-               tuple_(DecisionLog.profile_id, DecisionLog.symbol).in_(pairs),
-               # 2026-10-06: the rejected lane's audit rows
-               # (PROFILE_CONSOLIDATION_REJECTED) carry the profile_id too and
-               # equally must never become "latest" over a real evaluation.
-               DecisionLog.event_type.notin_(
-                   ("PROFILE_CONSOLIDATION", "PROFILE_CONSOLIDATION_REJECTED")))
-        .distinct(DecisionLog.profile_id, DecisionLog.symbol)
-        .order_by(DecisionLog.profile_id, DecisionLog.symbol,
-                  DecisionLog.created_at.desc(), DecisionLog.id.desc())
-    )
+    from .latest_profile_decision import latest_profile_decision_ids
+    latest = latest_profile_decision_ids(user_id=user_id, pairs=pairs)
     rows = (await db.execute(
         select(DecisionLog, L3AuthorizationOutbox, ShadowTrade)
         .outerjoin(L3AuthorizationOutbox, L3AuthorizationOutbox.decision_id == DecisionLog.id)

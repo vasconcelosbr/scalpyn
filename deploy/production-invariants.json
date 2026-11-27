@@ -188,6 +188,16 @@
       ]
     },
     {
+      "id": "profile-latest-bounded-index-lookup",
+      "description": "Display and authorization select latest per pair with bounded indexed probes instead of parallel scans of decision history.",
+      "files": [
+        { "path": "backend/app/services/latest_profile_decision.py", "contains_all": ["LATEST_PROFILE_INDEXED_PROBES", ".limit(1)", ".lateral('latest_for_pair')"] },
+        { "path": "backend/app/services/l3_public_authorization.py", "contains_all": ["latest_profile_decision_ids(user_id=user_id, pairs=pairs)"] },
+        { "path": "backend/alembic/versions/254_profile_latest_index.py", "contains_all": ["ix_decisions_profile_symbol_latest", "CONCURRENTLY", "indisvalid AND indisready"] },
+        { "path": "backend/tests/test_profile_display_query_postgres.py", "contains_all": ["test_latest_lookup_uses_bounded_index_without_parallel_history_scan", "Actual Rows", "Parallel Aware"] }
+      ]
+    },
+    {
       "id": "profile-display-narrow-latest-selection",
       "description": "Latest decision IDs are selected before historical JSON evidence is extracted, preserving profile rules and external ARMED semantics.",
       "files": [
