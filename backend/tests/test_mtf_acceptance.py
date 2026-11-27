@@ -195,8 +195,8 @@ def test_mtf_collection_reserves_headroom_for_open_candle():
     assert collection_fetch_limit(config, "15m") == 202
 
 
-def test_mtf_collector_reports_dedup_suppression(monkeypatch):
-    from app.tasks import collect_mtf_ohlcv, task_dispatch
+def test_mtf_collector_reports_inline_publication(monkeypatch):
+    from app.tasks import collect_mtf_ohlcv, compute_mtf_indicators
 
     monkeypatch.setattr(
         collect_mtf_ohlcv,
@@ -204,12 +204,13 @@ def test_mtf_collector_reports_dedup_suppression(monkeypatch):
         lambda _coro: {"successful_symbols": 65},
     )
     monkeypatch.setattr(collect_mtf_ohlcv, "collect_timeframe", lambda _tf: None)
-    monkeypatch.setattr(task_dispatch, "enqueue", lambda *args, **kwargs: None)
+    monkeypatch.setattr(compute_mtf_indicators, "compute_timeframe", lambda _tf: None)
 
     result = collect_mtf_ohlcv._collect_and_chain("15m")
 
     assert result["compute_task_id"] is None
     assert result["compute_enqueued"] is False
+    assert result["compute_inline"] is True
 
 
 def test_mtf_warmup_rejects_missing_enabled_period_config():

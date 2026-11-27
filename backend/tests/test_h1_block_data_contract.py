@@ -121,15 +121,52 @@ async def test_watchlist_table_uses_h1_candles_and_retains_live_price(monkeypatc
     assert values["LEO_USDT"]["price"] == 9.01
 
 
-def test_next_closed_candle_cannot_be_suppressed_by_previous_dedup_key(monkeypatch):
-    from app.tasks import collect_mtf_ohlcv, task_dispatch
-    monkeypatch.setattr(collect_mtf_ohlcv, "collect_timeframe", lambda tf: tf)
-    keys = []
-    def enqueue(*args, **kwargs):
-        keys.append(kwargs["dedup_key"])
-        return "task"
-    monkeypatch.setattr(task_dispatch, "enqueue", enqueue)
-    for cutoff in (100, 101):
-        monkeypatch.setattr(collect_mtf_ohlcv, "_run", lambda tf: {"successful_symbols": 1, "candle_cutoff": cutoff})
-        assert collect_mtf_ohlcv._collect_and_chain("1h")["compute_enqueued"]
-    assert keys == ["compute-mtf-1h-100", "compute-mtf-1h-101"]
+
+@pytest.mark.parametrize("timeframe", ["1h", "15m"])
+def test_collection_publishes_before_returning_without_second_queue(monkeypatch, timeframe):
+    from app.tasks import collect_mtf_ohlcv, compute_mtf_indicators, task_dispatch
+    events = []
+    monkeypatch.setattr(collect_mtf_ohlcv, "_run", lambda value: value)
+    def collect(tf):
+        events.append(("collected", tf))
+        return {"successful_symbols": 30}
+    def compute(tf):
+        events.append(("published", tf))
+        return {"computed": 30, "skipped": 0}
+    monkeypatch.setattr(collect_mtf_ohlcv, "collect_timeframe", collect)
+    monkeypatch.setattr(compute_mtf_indicators, "compute_timeframe", compute)
+    monkeypatch.setattr(task_dispatch, "enqueue", lambda *a, **kw: pytest.fail("second queue"))
+    result = collect_mtf_ohlcv._collect_and_chain(timeframe)
+    assert events == [("collected", timeframe), ("published", timeframe)]
+    assert result["compute_inline"] is True
+    assert result["compute_result"] == {"computed": 30, "skipped": 0}
+    assert result["compute_enqueued"] is False
+
+
+def test_collection_does_not_publish_when_no_closed_inputs(monkeypatch):
+    from app.tasks import collect_mtf_ohlcv, compute_mtf_indicators
+    monkeypatch.setattr(collect_mtf_ohlcv, "_run", lambda value: value)
+    monkeypatch.setattr(collect_mtf_ohlcv, "collect_timeframe", lambda tf: {"successful_symbols": 0})
+    monkeypatch.setattr(compute_mtf_indicators, "compute_timeframe",
+                        lambda tf: pytest.fail("no valid inputs"))
+    result = collect_mtf_ohlcv._collect_and_chain("1h")
+    assert result["compute_inline"] is False
+
+
+def test_collection_publication_failure_is_not_reported_as_success(monkeypatch):
+    from app.tasks import collect_mtf_ohlcv, compute_mtf_indicators
+    monkeypatch.setattr(collect_mtf_ohlcv, "_run", lambda value: value)
+    monkeypatch.setattr(collect_mtf_ohlcv, "collect_timeframe", lambda tf: {"successful_symbols": 1})
+    def fail(tf):
+        raise RuntimeError("database unavailable")
+    monkeypatch.setattr(compute_mtf_indicators, "compute_timeframe", fail)
+    with pytest.raises(RuntimeError, match="database unavailable"):
+        collect_mtf_ohlcv._collect_and_chain("1h")
+
+
+def test_canonical_collectors_do_not_hold_prefetch_in_rate_buckets():
+    from app.tasks.celery_app import TASK_ANNOTATIONS
+    for timeframe in ("1h", "15m"):
+        config = TASK_ANNOTATIONS[f"app.tasks.collect_mtf_ohlcv.collect_{timeframe}"]
+        assert config["rate_limit"] is None
+        assert config["soft_time_limit"] < config["time_limit"]
