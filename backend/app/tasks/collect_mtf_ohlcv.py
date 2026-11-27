@@ -163,22 +163,17 @@ def _run(coro):
 
 def _collect_and_chain(timeframe: str) -> dict:
     result = _run(collect_timeframe(timeframe))
+    result["compute_task_id"] = None
+    result["compute_enqueued"] = False
+    result["compute_inline"] = False
     if result["successful_symbols"]:
-        from . import task_dispatch
+        from .compute_mtf_indicators import compute_timeframe
 
-        # Each closed window owns a distinct dedup key. A late previous
-        # collection must not suppress the following hourly computation.
-        cutoff = result.get("candle_cutoff", int(datetime.now(timezone.utc).timestamp()) // _TF_SECONDS[timeframe])
-        compute_task_id = task_dispatch.enqueue(
-            f"app.tasks.compute_mtf_indicators.compute_{timeframe}",
-            dedup_key=f"compute-mtf-{timeframe}-{cutoff}",
-            ttl_seconds=_TF_SECONDS[timeframe],
-        )
-        result["compute_task_id"] = compute_task_id
-        result["compute_enqueued"] = compute_task_id is not None
-    else:
-        result["compute_task_id"] = None
-        result["compute_enqueued"] = False
+        # MTF_CANDLE_PUBLICATION_CHAIN: publish before releasing the collection
+        # worker. A second queue/rate bucket can delay publication beyond the
+        # configured candle validity or let research rows replace the input.
+        result["compute_result"] = _run(compute_timeframe(timeframe))
+        result["compute_inline"] = True
     return result
 
 

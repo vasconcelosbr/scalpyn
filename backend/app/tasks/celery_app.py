@@ -536,8 +536,10 @@ TASK_ANNOTATIONS = {
     # ad-hoc dispatch fica com folga).
     "app.tasks.compute_indicators.compute_structural_5m": {**_STRUCTURAL_GUARDS, "rate_limit": "12/m", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_indicators.compute":              {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},
-    "app.tasks.collect_mtf_ohlcv.collect_15m":           {**_STRUCTURAL_GUARDS, "rate_limit": "4/h", **_NO_REQUEUE_ON_WORKER_LOSS},
-    "app.tasks.collect_mtf_ohlcv.collect_1h":            {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
+    # MTF_CANDLE_PUBLICATION_CHAIN: Beat owns cadence; a rate bucket holds
+    # the shared research worker prefetch slot across later candle closes.
+    "app.tasks.collect_mtf_ohlcv.collect_15m":           {**_STRUCTURAL_GUARDS, "rate_limit": None, **_NO_REQUEUE_ON_WORKER_LOSS},
+    "app.tasks.collect_mtf_ohlcv.collect_1h":            {**_STRUCTURAL_GUARDS, "rate_limit": None, **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_mtf_indicators.compute_15m":      {**_STRUCTURAL_GUARDS, "rate_limit": "4/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.compute_mtf_indicators.compute_1h":       {**_STRUCTURAL_GUARDS, "rate_limit": "2/h", **_NO_REQUEUE_ON_WORKER_LOSS},
     "app.tasks.mtf_chart.observe":                      {**_STRUCTURAL_GUARDS, **_NO_REQUEUE_ON_WORKER_LOSS},

@@ -7,6 +7,15 @@
   },
   "required_features": [
     {
+      "id": "mtf-candle-inline-publication",
+      "description": "Canonical H1/M15 collection publishes indicators before returning, without shared MTF observation queue or collector rate bucket delays.",
+      "files": [
+        {"path":"backend/app/tasks/collect_mtf_ohlcv.py","contains_all":["MTF_CANDLE_PUBLICATION_CHAIN", "compute_inline", "_run(compute_timeframe(timeframe))"]},
+        {"path":"backend/app/tasks/celery_app.py","contains_all":["MTF_CANDLE_PUBLICATION_CHAIN"]},
+        {"path":"backend/tests/test_h1_block_data_contract.py","contains_all":["test_collection_publishes_before_returning_without_second_queue", "test_canonical_collectors_do_not_hold_prefetch_in_rate_buckets", "test_collection_publication_failure_is_not_reported_as_success"]}
+      ]
+    },
+    {
       "id": "h1-canonical-block-inputs",
       "description": "Closed H1 collection runs in recovery; legacy writers yield and missing/expired/mismatched block inputs remain distinguishable without M5 fallback.",
       "files": [
