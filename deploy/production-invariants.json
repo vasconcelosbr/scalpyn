@@ -7,6 +7,15 @@
   },
   "required_features": [
     {
+      "id": "l3-pre-gate-profile-audit",
+      "description": "Pre-L3 exclusions refresh current authored-rule diagnostics without Shadow routing or execution changes.",
+      "files": [
+        {"path": "backend/app/services/l3_rejected_profile_audit.py", "contains_all": ["L3_PRE_GATE_PROFILE_AUDIT", "L3_REJECTED_PROFILE_AUDIT"]},
+        {"path": "backend/app/tasks/pipeline_scan.py", "contains_all": ["await _persist_decision_logs(db, wl.user_id, _rejected_audits)", "L3_REJECTED_PROFILE_AUDIT"]},
+        {"path": "backend/tests/test_l3_rejected_profile_audit.py", "contains_all": ["test_pre_gate_rejection_refreshes_current_profile_without_execution", "test_diagnostic_persists_despite_recent_decision_and_never_creates_outbox", "test_scanner_audits_excluded_candidates_before_operational_evaluation"]}
+      ]
+    },
+    {
       "id": "mtf-candle-inline-publication",
       "description": "Canonical H1/M15 collection publishes indicators before returning, without shared MTF observation queue or collector rate bucket delays.",
       "files": [
