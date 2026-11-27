@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MTFArmingRoadmap } from '../components/mtf/MTFArmingRoadmap';
-import { armingRoadmap, structuralReferences } from './mtfArmingRoadmap';
-import type { Analysis, TriggerCheck } from '../components/mtf/types';
+import { armingRoadmap, structuralReferences, watchlistArmingAnalysis } from './mtfArmingRoadmap';
+import type { Analysis, Asset, TriggerCheck } from '../components/mtf/types';
 
 function alignment(id:string,tf:'4h'|'1h'|'15m', highs:number[],lows:number[]):TriggerCheck {
   return {id,label:'Direção',actual:'RANGE',expected:'UP',operator:'=',unit:'',role:'required',timeframe:tf,
@@ -75,4 +75,23 @@ test('armed is taken from canonical status even with trigger confirmations pendi
   a.trigger_diagnostics!.checks=[{...a.trigger_diagnostics!.checks[0],id:'rules:GATILHO',state:'FAIL'}];
   const view=armingRoadmap(a,a.symbol,0)!;
   assert.equal(view.achieved,true);assert.equal(view.arming.length,0);assert.equal(view.remaining[0].id,'rules:GATILHO');
+});
+
+test('current watchlist evidence renders before candles without using another profile or stale version',()=>{
+  const a=snapshot(); a.profile_id='profile';a.vetoes=[];
+  a.entry_candidate={state:'BLOCKED',reason:null,timeframe:'1h',low:95,high:98,support_low:95,support_high:96,
+    atr:1,proximity_atr:1.4,entry:null,evaluated_at:a.evaluated_at_utc,valid_until:'2026-11-27T20:45:00Z',
+    config_hash:a.config_hash,vetoes:[],operational_effect:false};
+  const asset:Asset={symbol:a.symbol,profile_id:'profile',mtf:a}, now=Date.parse('2026-11-27T20:31:00Z');
+  assert.equal(watchlistArmingAnalysis(asset,a.symbol,'',now),a);
+  assert.equal(watchlistArmingAnalysis(asset,a.symbol,'profile',now),a);
+  assert.equal(watchlistArmingAnalysis(asset,a.symbol,'other',now),undefined);
+  assert.equal(watchlistArmingAnalysis({...asset,profile_id:'other'},a.symbol,'',now),undefined);
+  assert.equal(watchlistArmingAnalysis(asset,'ETH_USDT','',now),undefined);
+  assert.equal(watchlistArmingAnalysis(asset,a.symbol,'',Date.parse(a.entry_candidate.valid_until)),undefined);
+  for (const veto of ['CONFIG_CHANGED','EVALUATION_STALE']) {
+    assert.equal(watchlistArmingAnalysis({...asset,mtf:{...a,vetoes:[veto]}},a.symbol,'',now),undefined);
+  }
+  assert.equal(watchlistArmingAnalysis({...asset,mtf:{...a,entry_candidate:{...a.entry_candidate,config_hash:'old'}}},a.symbol,'',now),undefined);
+  assert.equal(watchlistArmingAnalysis({...asset,mtf:{...a,entry_candidate:null}},a.symbol,'',now),undefined);
 });

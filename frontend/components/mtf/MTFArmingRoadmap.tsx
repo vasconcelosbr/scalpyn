@@ -3,8 +3,8 @@ import { armingRoadmap, structuralReferences } from '../../lib/mtfArmingRoadmap'
 import { CheckDetails, checkSummary, conditionText, diagnosticValue } from './MTFCheckDetails';
 import { diagnosticTitle, statusLabels, type Analysis, type TriggerCheck } from './types';
 
-export function MTFArmingRoadmap({analysis,symbol,date,precision}: {
-  analysis?:Analysis; symbol:string; date:(value?:string|null)=>string; precision?:number;
+export function MTFArmingRoadmap({analysis,symbol,date,precision,fromWatchlist=false}: {
+  analysis?:Analysis; symbol:string; date:(value?:string|null)=>string; precision?:number; fromWatchlist?:boolean;
 }) {
   const [now,setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -46,6 +46,7 @@ export function MTFArmingRoadmap({analysis,symbol,date,precision}: {
       <p className="mtf-diagnostic-symbol">{symbol.replace('_','/')}<span>{view && analysis ? statusLabels[analysis.status] : 'AGUARDANDO DADOS'}</span></p>
       {!view || !analysis ? <p role="status" className="mtf-muted">Aguardando avaliação atual deste ativo. Referências vencidas ou de outra configuração não são usadas.</p> : <>
         <p className="mtf-muted">Avaliação confirmada: {date(analysis.candle_close_at_utc)}. Referências recalculadas quando novos pivôs são confirmados.</p>
+        {fromWatchlist && <p className="mtf-muted">Fonte: avaliação registrada da watchlist. O carregamento dos candles é independente deste diagnóstico.</p>}
         <p className="mtf-arm-summary">{view.achieved ? 'O ativo já atingiu ARMADO nesta avaliação.' :
           view.armedRule?.state === 'PASS' ? 'Regra ARMADO atendida; o estado final ainda depende dos bloqueios abaixo.' : 'Confirmações pendentes para armar e bloqueios da avaliação:'}</p>
         {view.band && view.band.state !== 'UNAVAILABLE' ? <div className="mtf-arm-band">
