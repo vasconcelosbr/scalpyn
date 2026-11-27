@@ -7,6 +7,15 @@
   },
   "required_features": [
     {
+      "id": "mtf-arming-roadmap",
+      "description": "Per-asset arming references use frozen confirmed pivots and canonical groups, suppress stale contexts and preserve strategy status.",
+      "files": [
+        {"path": "frontend/app/grafico-mtf/page.tsx", "contains_all": ["<MTFArmingRoadmap", "analysis={analysis} symbol={symbol}"]},
+        {"path": "frontend/lib/mtfArmingRoadmap.ts", "contains_all": ["structuralReferences", "diagnostic.config_hash !== analysis.config_hash", "c.role !== 'context'", "p.confirmed_at <= evidence.closed_at!"]},
+        {"path": "frontend/lib/mtfArmingRoadmap.test.ts", "contains_all": ["AAVE lateral requires a higher confirmed H4 high and H1 low", "symbol, version and freshness mismatches", "armed is taken from canonical status"]}
+      ]
+    },
+    {
       "id": "l3-pre-gate-profile-audit",
       "description": "Pre-L3 exclusions refresh current authored-rule diagnostics without Shadow routing or execution changes.",
       "files": [

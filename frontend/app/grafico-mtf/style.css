@@ -70,3 +70,15 @@ main:has(.mtf-screen){max-width:none!important;padding-left:16px!important;paddi
 @keyframes mtf-readiness-update{from{background:rgba(212,166,79,.18)}to{background:transparent}}
 
 @media(prefers-reduced-motion:reduce){.mtf-readiness.tracking>.mtf-readiness-heading svg,.mtf-readiness-values{animation:none}}
+/* Frozen arming evidence: compact enough for the analysis sidebar. */
+.mtf-arm-condition{padding:16px 0;border-top:1px solid var(--border,#263244)}
+.mtf-arm-condition header,.mtf-arm-band header{display:flex;gap:8px;justify-content:space-between;align-items:baseline}
+.mtf-arm-condition header span,.mtf-arm-band header span{white-space:nowrap;color:var(--muted,#8c9ab0);font-size:11px}
+.mtf-arm-summary{font-weight:600;line-height:1.6}
+.mtf-arm-reason{color:#e8b95b;line-height:1.6}
+.mtf-arm-level{padding:10px 12px;margin:10px 0;background:rgba(148,163,184,.06);border-radius:8px}
+.mtf-arm-level>span{display:block;font-size:11px;color:var(--muted,#8c9ab0);margin-bottom:6px}
+.mtf-arm-level>b,.mtf-arm-band>b{font-family:'JetBrains Mono',monospace;overflow-wrap:anywhere}
+.mtf-arm-level p,.mtf-arm-band p{margin:8px 0 0;line-height:1.6}
+.mtf-arm-band{padding:12px;margin:14px 0;border:1px solid rgba(212,166,79,.35);border-radius:10px}
+.mtf-arm-band header{margin-bottom:10px}
