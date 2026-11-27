@@ -7,6 +7,17 @@
   },
   "required_features": [
     {
+      "id": "h1-canonical-block-inputs",
+      "description": "Closed H1 collection runs in recovery; legacy writers yield and missing/expired/mismatched block inputs remain distinguishable without M5 fallback.",
+      "files": [
+        {"path":"backend/scripts/run_observation_beat.py","contains_all":["collect_mtf_1h_after_close", "collect_mtf_15m_after_close"]},
+        {"path":"backend/app/services/structural_scheduler_service.py","contains_all":["H1_CANONICAL_OWNER", "canonical_mtf_active"]},
+        {"path":"backend/app/services/block_condition_timeframe.py","contains_all":["indicator_identity_mismatch", "source_age_seconds", "indicator_stale"]},
+        {"path":"backend/tests/test_h1_block_data_contract.py","contains_all":["test_live_legacy_h1_fixture_explains_identity_mismatch_and_missing_ema", "test_governed_h1_is_fresh_until_next_candle_but_expires_if_collection_stops", "test_legacy_scheduler_yields_before_fetch_when_canonical_owner_is_active"]},
+        {"path":"frontend/lib/h1BlockDataContract.test.ts","contains_all":["H1 validity derives from configured cadence", "missing, incompatible, unclosed and expired inputs"]}
+      ]
+    },
+    {
       "id": "watchlist-complete-asset-diagnostic",
       "description": "Owned read-only per-asset diagnostics preserve every producer/timeframe, frozen decision evidence and complete JSON export across pipeline levels.",
       "files": [

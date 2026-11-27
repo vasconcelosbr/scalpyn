@@ -345,6 +345,11 @@ def _derive_min_candles(indicators_config: dict, timeframe: str) -> int:
 
 async def _compute_async():
     from ..database import CeleryAsyncSessionLocal as AsyncSessionLocal
+    from ..services.canonical_mtf_ownership import canonical_mtf_active
+    async with AsyncSessionLocal() as ownership_db:
+        if await canonical_mtf_active(ownership_db):
+            logger.info("[compute-1h] H1 owned by canonical closed-candle chain")
+            return {"status": "CANONICAL_MTF_OWNER"}
     from ..services.feature_engine import FeatureEngine
     from ..services.market_data_service import market_data_service
     from ..services.seed_service import DEFAULT_INDICATORS

@@ -6,6 +6,7 @@ import { diagnosticHref } from "@/lib/watchlistDiagnostic";
 import { ChevronDown, ChevronRight, CheckCircle2, XCircle } from "lucide-react";
 import {
   EvaluationTraceBreakdown,
+  ConditionInputDetails,
   blockRuleOutcome,
   classifySkip,
   formatEvaluationTraceValue,
@@ -20,7 +21,7 @@ import { formatDateTime } from "@/lib/datetime";
 
 const DECISION_SUMMARY_INDICATOR_LIMIT = 3;
 
-export interface DecisionTraceItem {
+export interface DecisionTraceItem extends EvaluationTraceItem {
   type: "filter" | "block_rule" | "entry_trigger" | "signal";
   indicator: string;
   condition: string;
@@ -58,6 +59,8 @@ export interface WatchlistDecisionItem {
   current_values: Record<string, unknown>;
   expected_values: Record<string, string | null>;
   details: DecisionDetails;
+  recorded_decision?: { condition: string | null; current_value: unknown; expected: string | null; recorded_at: string | null };
+  indicator_timeframe?: string;
   /** ML model outputs — populated when ml_enabled + use_ml_ranking are active. */
   ml_probability?: number | null;
   ml_final_score?: number | null;
@@ -593,6 +596,10 @@ export function WatchlistDecisionTable({
                     {isExpanded && (
                       <tr className="border-b border-[#1A2035] bg-[#06080E]">
                         <td colSpan={totalCols} className="p-4">
+                          {item.recorded_decision && <div className="mb-3 text-xs text-[#94A3B8]">
+                            Rejeição registrada: {item.recorded_decision.condition} · Observado: {fmtValue(item.recorded_decision.current_value)} · {item.recorded_decision.recorded_at}
+                            <div className="mt-1">Diagnóstico atual abaixo · Indicadores da tabela: {item.indicator_timeframe || 'timeframe do perfil'}</div>
+                          </div>}
                           {item.status === "awaiting_data" && (
                             <div className="mb-4 rounded-xl border border-amber-500/30 bg-amber-950/20 p-4 text-xs text-amber-200" role="status">
                               <p className="font-semibold">Dados desatualizados ou indisponíveis</p>
@@ -783,6 +790,7 @@ function TraceSection({ title, items }: { title: string; items: DecisionTraceIte
               {intentLine && (
                 <div className="mt-0.5 text-[10px] italic opacity-75">{intentLine}</div>
               )}
+              <ConditionInputDetails item={item} />
               <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
                 <span className="break-all">
                   Current:{" "}

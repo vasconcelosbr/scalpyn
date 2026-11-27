@@ -120,6 +120,8 @@ def _period_for_indicator(key: str, config: dict[str, Any]) -> Any:
 
 def _parameters_for_indicator(key: str, config: dict[str, Any]) -> dict[str, Any]:
     family = key.split("_", 1)[0]
+    if family == "psar":
+        family = "parabolic_sar"
     if key.startswith("di_") or key.startswith("adx"):
         family = "adx"
     elif key.startswith("ema"):
@@ -157,6 +159,8 @@ def _governed_envelopes(
             "candle_policy": "CLOSED_ONLY",
             "candle_closed": True,
             "source_timestamp": source_timestamp.isoformat(),
+            "source_timestamp_semantics": "CANDLE_OPEN_TIME",
+            "candle_close_time": (source_timestamp + timedelta(seconds=_TIMEFRAME_SECONDS.get(timeframe, 0))).isoformat(),
             "computed_at": computed_at.isoformat(),
             "available_at": computed_at.isoformat(),
             "producer_version": _PRODUCER_VERSION,
@@ -231,7 +235,7 @@ async def _compute_symbol(
             float(row.quote_volume) if row.quote_volume is not None else None
         ),
     } for row in reversed(rows)])
-    results = engine.calculate(frame, market_data=None)
+    results = engine.calculate(frame, market_data=None, timeframe=timeframe, as_of=now)
     if not results:
         return False
     source_timestamp = source_row.time

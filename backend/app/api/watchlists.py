@@ -659,6 +659,9 @@ async def _fetch_indicators_map(
     symbols: List[str],
     *,
     include_stale: bool = False,
+    profile_config: Optional[dict] = None,
+    market_type: str = "spot",
+    user_id=None,
 ) -> Dict[str, Dict[str, Any]]:
     """Fetch merged indicator values per symbol, returning flat scalar dicts.
 
@@ -679,7 +682,26 @@ async def _fetch_indicators_map(
     try:
         from ..utils.indicator_merge import fetch_merged_indicators
         merged = await fetch_merged_indicators(db, list(symbols), include_stale=include_stale)
-        return {sym: mi.as_flat_dict() for sym, mi in merged.items()}
+        values = {sym: mi.as_flat_dict() for sym, mi in merged.items()}
+        timeframe = (profile_config or {}).get("default_timeframe")
+        if timeframe and timeframe != "5m":
+            from ..services.indicators_provider import get_timeframe_indicators
+            from ..services.indicator_classifier import timeframe_semantics
+            exact = await get_timeframe_indicators(db, list(symbols), timeframe=timeframe,
+                                                  market_type=market_type, include_stale=include_stale)
+            exact_values = {sym: mi.as_flat_dict() for sym, mi in exact.items()}
+            if timeframe == "4h" and market_type == "spot":
+                from ..services.profile_candles_4h import get_closed_profile_4h
+                h4 = await get_closed_profile_4h(db, list(symbols), user_id=user_id)
+                exact_values = {sym: {c["indicator"]: c["actual"] for c in cs} for sym, cs in h4.items()}
+            for symbol in symbols:
+                flat = values.setdefault(symbol, {})
+                candle = exact_values.get(symbol, {})
+                for key in set(flat) | set(candle):
+                    if (key != "price" and not key.startswith(("recent_high_", "recent_low_", "price_change_"))
+                            and key != "breakout_distance_pct" and timeframe_semantics(key) == "CANDLE_TIMEFRAME"):
+                        flat[key] = candle.get(key)
+        return values
     except Exception as exc:
         logger.warning("[Pipeline] indicators fetch failed: %s", exc)
         return {}
@@ -2793,7 +2815,7 @@ async def get_watchlist_assets(
 
     # ── Fetch live indicator values for all asset symbols ─────────────────────
     symbols = [a.symbol for a in assets]
-    ind_map = await _fetch_indicators_map(db, symbols, include_stale=True) if symbols else {}
+    ind_map = await _fetch_indicators_map(db, symbols, include_stale=True, profile_config=profile_config, market_type=getattr(wl, "market_mode", "spot"), user_id=user_id) if symbols else {}
 
     # On-demand indicator computation is intentionally skipped on the read path.
     # Computing indicators inline requires Gate.io OHLCV calls for up to 40 symbols
@@ -3411,7 +3433,7 @@ async def _get_watchlist_rejections_payload(
         flow_checks = await load_flow_checks(
             user_id=user_id, watchlist_id=wl.id, symbols=rejection_symbols,
         )
-    ind_map = await _fetch_indicators_map(db, rejection_symbols, include_stale=True) if rejection_symbols else {}
+    ind_map = await _fetch_indicators_map(db, rejection_symbols, include_stale=True, profile_config=profile_config, market_type=getattr(wl, "market_mode", "spot"), user_id=user_id) if rejection_symbols else {}
     meta_map: Dict[str, Dict[str, Any]] = {}
     if rejection_symbols:
         try:
@@ -3601,6 +3623,9 @@ async def _get_watchlist_rejections_payload(
         items.append({
             **normalized,
             "flow_check": flow_checks.get(row.symbol),
+            "indicator_timeframe": (profile_config or {}).get("default_timeframe"),
+            "recorded_decision": {"condition": row.condition_text, "current_value": row.current_value,
+                                  "expected": row.expected_value, "recorded_at": _iso_utc(row.recorded_at)},
             "failed_type": row.failed_type,
             "failed_indicator": row.failed_indicator,
             "condition": row.condition_text,

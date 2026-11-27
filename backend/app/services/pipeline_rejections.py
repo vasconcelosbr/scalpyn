@@ -332,16 +332,23 @@ def _evaluate_block_rule(
     details: List[Dict[str, Any]] = []
 
     for condition in conditions:
+        resolved = block_condition_data(condition, asset, scheduler_group=scheduler_group)
         status, detail = rule_engine.evaluate_condition_status(
             condition,
-            block_condition_data(condition, asset, scheduler_group=scheduler_group),
+            resolved,
             field_key="indicator",
         )
+        diagnostics = resolved.get("_block_input_diagnostics", [])
+        if status == RuleStatus.SKIPPED and isinstance(detail, dict):
+            reason = next((d["reason"] for d in diagnostics if d.get("reason")), None)
+            if reason:
+                detail = {**detail, "reason": reason}
         details.append(
             {
                 "status": status,
                 "condition": condition,
                 "detail": detail,
+                "inputs": diagnostics,
             }
         )
 
@@ -437,6 +444,13 @@ def _evaluate_block_rule(
         "condition": condition_text,
         "expected": block.get("reason") or condition_text,
         "current_value": actual_payload if len(actual_payload) > 1 else next(iter(actual_payload.values()), None),
+        "conditions": [{
+            "condition": format_condition_text(item["condition"], field_key="indicator"),
+            "status": item["status"].value,
+            "current_value": _detail_actual(item["detail"]),
+            "reason": item["detail"].get("reason") if isinstance(item["detail"], dict) else None,
+            "inputs": item["inputs"],
+        } for item in details],
         "status": external_status,
         "outcome": outcome,
         "condition_matched": condition_matched,
@@ -537,6 +551,8 @@ def _normalized_trace_item(item: Dict[str, Any]) -> Dict[str, Any]:
         normalized["outcome"] = item["outcome"]
     if "condition_matched" in item:
         normalized["condition_matched"] = item["condition_matched"]
+    if "conditions" in item:
+        normalized["conditions"] = jsonable_value(item["conditions"])
     return normalized
 
 
