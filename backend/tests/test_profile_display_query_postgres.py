@@ -106,3 +106,16 @@ def test_latest_lookup_uses_bounded_index_without_parallel_history_scan(database
     scans=[n for n in actual if n.get('Index Name')=='ix_decisions_profile_symbol_latest']
     assert scans and all(n['Actual Rows'] <= 1 for n in scans)
     assert set(db.scalars(stmt)) == set(range(19981,20001))
+    # Reused prepared plans must still prove the fixed partial-index predicate.
+    compiled=stmt.compile(dialect=postgresql.dialect())
+    assert 'PROFILE_CONSOLIDATION' not in str(compiled.params)
+    prepared=sql.replace("'"+str(uid)+"'",'$1').replace("'"+str(profile)+"'",'$2')
+    db.execute(sa.text('SET LOCAL plan_cache_mode=force_generic_plan'))
+    db.execute(sa.text('PREPARE latest_profile_probe(uuid,uuid) AS '+prepared))
+    try:
+        plan=db.scalar(sa.text(f"EXPLAIN (ANALYZE,FORMAT JSON) EXECUTE latest_profile_probe('{uid}','{profile}')"))[0]['Plan']
+        actual=list(nodes(plan))
+        assert not any(n.get('Parallel Aware') or n['Node Type'].startswith('Gather') for n in actual)
+        assert any(n.get('Index Name')=='ix_decisions_profile_symbol_latest' for n in actual)
+    finally:
+        db.execute(sa.text('DEALLOCATE latest_profile_probe'))

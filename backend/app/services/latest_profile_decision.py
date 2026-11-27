@@ -1,6 +1,6 @@
 """Indexed latest-per-pair lookup shared by display and authorization reads."""
 
-from sqlalchemy import column, false, select, true, values
+from sqlalchemy import column, false, literal_column, select, true, values
 
 from ..models.backoffice import DecisionLog
 
@@ -25,8 +25,13 @@ def latest_profile_decision_ids(*, user_id, pairs):
             DecisionLog.user_id == user_id,
             DecisionLog.profile_id == requested.c.profile_id.cast(DecisionLog.profile_id.type),
             DecisionLog.symbol == requested.c.symbol,
-            DecisionLog.event_type.notin_(
-                ('PROFILE_CONSOLIDATION', 'PROFILE_CONSOLIDATION_REJECTED')),
+            # These fixed internal event names match the partial index predicate.
+            # Literal SQL keeps that index usable in a cached generic plan too;
+            # user/profile/symbol inputs remain bound parameters.
+            DecisionLog.event_type.notin_((
+                literal_column("'PROFILE_CONSOLIDATION'"),
+                literal_column("'PROFILE_CONSOLIDATION_REJECTED'"),
+            )),
         )
         .order_by(DecisionLog.created_at.desc(), DecisionLog.id.desc())
         .limit(1)
