@@ -13,6 +13,7 @@ import { chartRemovalState } from '@/lib/mtfMembership';
 import { MTFSettingsDialog } from '@/components/mtf/MTFSettingsDialog';
 import { MTFPumpFlow } from '@/components/mtf/MTFPumpFlow';
 import { MTFTriggerDiagnostics } from '@/components/mtf/MTFTriggerDiagnostics';
+import { MTFArmingRoadmap } from '@/components/mtf/MTFArmingRoadmap';
 import { MTFBitcoinTicker } from '@/components/mtf/MTFBitcoinTicker';
 import { MTFFearGreed } from '@/components/mtf/MTFFearGreed';
 import { MTFEntryContext } from '@/components/mtf/MTFEntryContext';
@@ -280,6 +281,7 @@ export default function MTFPage() {
         {!data && !loading && !evaluationPending && !error && membership!=='removed' && <div className="mtf-empty mtf-welcome"><Activity size={42}/><h2>O contexto antes do gatilho.</h2><p>Selecione uma oportunidade para conectar estrutura, zona e price action.</p><span>ESTRUTURA {(cfg?.timeframes?.structure ?? '4h').toUpperCase()} → ZONA {(cfg?.timeframes?.zone ?? '1h').toUpperCase()} → GATILHO {(cfg?.timeframes?.trigger ?? '5m').toUpperCase()}</span></div>}
       </section>
       {right && <aside className="mtf-analysis">
+        <MTFArmingRoadmap key={`arming:${watchlist}:${symbol}:${profile}`} analysis={analysis} symbol={symbol} date={date} precision={data?.price_format?.precision}/>
         {cfg?.presentation && <MTFPumpFlow key={`flow:${watchlist}:${symbol}:${profile}`} context={analysis?.pump_flow} watchlist={watchlist} pollSeconds={cfg.presentation.watchlist_poll_seconds} timezone={prefs.timezone} stale={historical} />}
         <MTFTriggerDiagnostics key={`${watchlist}:${symbol}:${profile}`} analysis={analysis} symbol={symbol} date={date}
           pending={historical ? 'Avaliação indisponível ou desatualizada. Aguardando atualização.' : undefined}/>
