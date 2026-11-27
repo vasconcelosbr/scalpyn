@@ -523,10 +523,10 @@ export function WatchlistDecisionTable({
                   <Fragment key={rowKey}>
                     <tr
                       className={`cursor-pointer border-b border-[#1A2035]/60 hover:bg-[#0D1118] ${palette.row}`}
-                      onClick={() => watchlistId ? window.location.assign(diagnosticHref(watchlistId, item.symbol)) : onExpandedRowChange(isExpanded ? null : rowKey)}
+                      onClick={() => onExpandedRowChange(isExpanded ? null : rowKey)}
                     >
-                      <td className="px-2 py-2.5 text-[#334155]">
-                        <button type="button" aria-label={`Resumo de ${item.symbol}`} aria-expanded={isExpanded} onClick={e => { e.stopPropagation(); onExpandedRowChange(isExpanded ? null : rowKey); }}>
+                      <td className="px-1 py-0 text-[#64748B]">
+                        <button type="button" className="flex min-h-9 min-w-8 items-center justify-center rounded hover:bg-[#172235] focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400" aria-label={`Resumo de ${item.symbol}`} aria-expanded={isExpanded} onClick={e => { e.stopPropagation(); onExpandedRowChange(isExpanded ? null : rowKey); }}>
                           {isExpanded ? <ChevronDown size={13} className="text-[#60A5FA]" /> : <ChevronRight size={13} />}
                         </button>
                       </td>
