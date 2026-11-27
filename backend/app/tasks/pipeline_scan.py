@@ -2703,6 +2703,7 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
                     "L3_CONTRACT_V3_SHADOW_EVALUATED",
                     "ML_ADVISORY_EVALUATED",
                     "L3_PUBLIC_AUTHORIZATION_EVALUATED",
+                    "L3_REJECTED_PROFILE_AUDIT",
                 }
             ):
                 decisions_to_insert.append(decision)
@@ -2838,6 +2839,9 @@ async def _persist_decision_logs(db, user_id, decisions: list[dict]):
     outbox_rows = []
     outbox_by_decision_id = {}
     for row, source_decision in zip(rows, decisions):
+        # Diagnostic-only pre-gate snapshots must never enqueue Shadow work.
+        if source_decision.get("event_type") == "L3_REJECTED_PROFILE_AUDIT":
+            continue
         contract_v3 = (row.metrics or {}).get("l3_authorization_contract_v3")
         if not isinstance(contract_v3, dict):
             continue
@@ -4608,6 +4612,17 @@ async def _run_pipeline_scan():
                     if wl.profile_id else {}
                 ) or {}
                 _capture_profile_name = _capture_prof_meta.get("name")
+                from ..services.l3_rejected_profile_audit import build_rejected_profile_audits
+                try:
+                    _rejected_audits = build_rejected_profile_audits(
+                        assets, profile_passed, profile_config=profile_config,
+                        watchlist=wl, profile_meta=_capture_prof_meta,
+                    )
+                    if _rejected_audits:
+                        async with db.begin_nested():
+                            await _persist_decision_logs(db, wl.user_id, _rejected_audits)
+                except Exception:
+                    logger.exception("[L3_PROFILE_AUDIT] pre-gate refresh failed wl=%s", wl_id)
                 decisions = await _evaluate_l3_decisions(
                     profile_passed,
                     profile_config,
