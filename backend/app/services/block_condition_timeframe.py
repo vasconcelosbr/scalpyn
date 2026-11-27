@@ -40,6 +40,7 @@ def block_condition_data(condition: dict, asset: dict, *, scheduler_group: Optio
     data = {**(asset.get("indicators") or {}), **asset}
     candidates = list(getattr(asset.get("_merged_indicators"), "candidates", []) or [])
     candidates.extend(asset.get("_block_ohlcv_candidates") or [])
+    diagnostics = []
     for reference in references:
         if reference.get("source") != "ohlcv" or not reference.get("timeframe"):
             continue
@@ -49,27 +50,57 @@ def block_condition_data(condition: dict, asset: dict, *, scheduler_group: Optio
         timeframe = reference["timeframe"]
         matches = [c for c in candidates if c.get("indicator") == indicator
                    and c.get("timeframe") == timeframe]
+        observed = max(matches, key=lambda c: str(c.get("computed_at") or "")) if matches else None
+        reason = None if matches else "indicator_not_available"
         for key in ("source_provider", "provider_policy_id", "period"):
             if reference.get(key) is not None:
-                matches = [c for c in matches if c.get(key) == reference[key]]
-        # Read the cadence the L3 contract pins, or the contract looks for a
-        # value from the other cadence and rejects (FEATURE_IDENTITY_NOT_AVAILABLE).
+                filtered = [c for c in matches if c.get(key) == reference[key]]
+                if matches and not filtered:
+                    reason = "indicator_identity_mismatch"
+                matches = filtered
         group = reference.get("scheduler_group") or scheduler_group
-        matches = [c for c in matches if in_scheduler_group(c, group)]
-        # Candidate metadata wins over a flat map, including a missing value.
+        filtered = [c for c in matches if in_scheduler_group(c, group)]
+        if matches and not filtered:
+            reason = "indicator_identity_mismatch"
+        matches = filtered
+        selected = None
         if matches:
             selected = max(matches, key=lambda c: str(c.get("computed_at") or c.get("source_timestamp") or ""))
             value: Any = selected.get("actual")
-            if (selected.get("stale") or selected.get("candle_closed") is False
-                    or (reference.get("max_age_seconds") is not None
-                        and (selected.get("age_seconds") is None
-                             or selected["age_seconds"] > reference["max_age_seconds"]))):
+            max_age = reference.get("max_age_seconds")
+            if selected.get("candle_closed") is False:
+                reason = "indicator_candle_not_closed"
+            elif selected.get("stale") or (max_age is not None and (
+                selected.get("age_seconds") is None or selected["age_seconds"] > max_age
+                or (selected.get("source_age_seconds") is not None and selected["source_age_seconds"] > max_age)
+            )):
+                reason = "indicator_stale"
+            elif value is None:
+                reason = "indicator_not_available"
+            if reason:
                 value = None
         elif not candidates:
             value = (asset.get("_indicators_by_tf") or {}).get(timeframe, {}).get(indicator)
+            if value is not None:
+                reason = None
         else:
             value = None
         data[indicator] = value
+        evidence = selected or observed or {}
+        diagnostics.append({
+            "indicator": indicator, "timeframe": timeframe, "reason": reason,
+            "value": value, "observed_value": evidence.get("actual"),
+            "source_provider": evidence.get("source_provider"),
+            "provider_policy_id": evidence.get("provider_policy_id"),
+            "period": evidence.get("period"),
+            "computed_at": evidence.get("computed_at"),
+            "source_timestamp": evidence.get("source_timestamp"),
+            "age_seconds": evidence.get("age_seconds"),
+            "source_age_seconds": evidence.get("source_age_seconds"),
+            "expected_identity": {k: reference.get(k) for k in (
+                "source_provider", "provider_policy_id", "period", "max_age_seconds", "candle_policy")},
+        })
+    data["_block_input_diagnostics"] = diagnostics
     return data
 
 

@@ -301,7 +301,8 @@ export function profileTemporalIdentity(
     const candlePolicy = reference.candle_policy || policy.candle_policy;
     const candleLabel = candlePolicy === "CLOSED_ONLY" ? "Candles fechados" : candlePolicy === "CURRENT_ALLOWED" ? "Candle atual permitido" : "Política de candle não definida";
     return { ...base, showTimeframe: !STRATEGY_PROFILE_INDICATOR_MAP.get(indicator)?.noTimeframe,
-      showPeriod: true, label: `${candleLabel}${timeframe ? ` · ${timeframe}` : ""}` };
+      showPeriod: true, label: `${candleLabel}${timeframe ? ` · ${timeframe}` : ""}`,
+      detail: `${provenance}. Validade máxima: ${reference.max_age_seconds ?? candlePolicyForTimeframe(policy, String(timeframe || "")).max_age_seconds ?? "não configurada"} s.` };
   }
   return base;
 }
@@ -321,6 +322,36 @@ function configuredProvider(
   return allowed[0];
 }
 
+/** Preserve the configured number of candle cycles; never copy an M5 TTL to H1. */
+export function candlePolicyForTimeframe(policy: ProfileSourcePolicy, timeframe: string): ProfileSourcePolicy {
+  const seconds = (value: unknown): number | undefined => {
+    const match = String(value || "").match(/^(\d+)(m|h|d)$/);
+    return match ? Number(match[1]) * ({ m: 60, h: 3600, d: 86400 }[match[2]] || 0) : undefined;
+  };
+  const target = seconds(timeframe), base = seconds(policy.timeframe);
+  const overrides = policy.max_age_seconds_by_timeframe as Record<string, number> | undefined;
+  const configured = overrides?.[timeframe];
+  const age = configured ?? (target && base && typeof policy.max_age_seconds === "number"
+    ? policy.max_age_seconds * target / base : policy.max_age_seconds);
+  return { ...policy, timeframe, max_age_seconds: age };
+}
+
+export function profileConditionTimeframeUpdates(condition: Record<string, any>, timeframe: string,
+  policies: ProfileSourcePolicies = {}, defaultTimeframe = "") {
+  const policy = policies.ohlcv || {};
+  const target = timeframe || defaultTimeframe;
+  const adapt = (reference: Record<string, any>) => {
+    const old = candlePolicyForTimeframe(policy, reference.timeframe || condition.timeframe || defaultTimeframe);
+    const next = candlePolicyForTimeframe(policy, target);
+    return { ...reference, timeframe: target,
+      max_age_seconds: reference.max_age_seconds == null || reference.max_age_seconds === old.max_age_seconds
+        ? next.max_age_seconds : reference.max_age_seconds };
+  };
+  return { ...adapt(condition), ...(condition.resolved_operands ? {
+    resolved_operands: Object.fromEntries(Object.entries(condition.resolved_operands).map(([side, value]) => [side, adapt(value as Record<string, any>)])),
+  } : {}) };
+}
+
 function conditionIdentity(
   indicator: string,
   condition: Record<string, any>,
@@ -337,7 +368,9 @@ function conditionIdentity(
       ? existing.source.trim()
       : inferredFeatureSource(indicator, Boolean(comparisonOperand))
   ) as ProfileFeatureSource;
-  const policy = policies[source] || {};
+  const basePolicy = policies[source] || {};
+  const targetTimeframe = String(condition.timeframe || existing.timeframe || defaultTimeframe || basePolicy.timeframe || "");
+  const policy = source === "ohlcv" ? candlePolicyForTimeframe(basePolicy, targetTimeframe) : basePolicy;
   const reference: Record<string, any> = {
     ...(existingMatches ? existing : {}),
     indicator,
@@ -345,7 +378,9 @@ function conditionIdentity(
   };
   reference.source_provider = configuredProvider(indicator, reference, policy);
   reference.provider_policy_id = reference.provider_policy_id || policy.provider_policy_id;
-  reference.max_age_seconds = reference.max_age_seconds ?? policy.max_age_seconds;
+  const movedTimeframe = source === "ohlcv" && existing.timeframe && existing.timeframe !== targetTimeframe;
+  const inheritedAge = movedTimeframe && reference.max_age_seconds === candlePolicyForTimeframe(basePolicy, String(existing.timeframe)).max_age_seconds;
+  reference.max_age_seconds = inheritedAge ? policy.max_age_seconds : reference.max_age_seconds ?? policy.max_age_seconds;
 
   if (source === "ohlcv") {
     const catalog = STRATEGY_PROFILE_INDICATOR_MAP.get(indicator);
@@ -743,7 +778,7 @@ export function prepareProfileBlockRuleIdentities<T extends Record<string, any>>
       conditions: _materializeConditionIdentities(
         block.conditions || [],
         currentFeatureCounts,
-        { ...policies, ohlcv: { ...policies.ohlcv, timeframe: block.timeframe || defaultTimeframe || policies.ohlcv?.timeframe } },
+        policies,
         block.timeframe || defaultTimeframe,
         `block_rules.blocks[${blockIndex}].conditions`,
         issues,

@@ -14,6 +14,8 @@ import {
   profileConditionManualUpdates,
   profileConditionPrimaryIndicator,
   profileTemporalIdentity,
+  profileConditionTimeframeUpdates,
+  candlePolicyForTimeframe,
   updateProfileConditionIndicator,
   type ProfileSourcePolicies,
 } from "@/lib/profileConditionState";
@@ -98,6 +100,8 @@ export interface ScoreRule {
 }
 
 interface Condition {
+  max_age_seconds?: number;
+  resolved_operands?: Record<string, Record<string, any>>;
   id: string;
   field: string;
   type?: "threshold" | "boolean" | "comparison";
@@ -480,7 +484,7 @@ export function ConditionBuilder({
               <select
                 className="input w-[72px] text-[11px]"
                 value={condition.timeframe || ""}
-                onChange={(event) => updateCondition(index, { timeframe: event.target.value || undefined })}
+                onChange={(event) => updateCondition(index, profileConditionTimeframeUpdates(condition, event.target.value, sourcePolicies, defaultTimeframe))}
                 title={`Timeframe (default: ${defaultTimeframe})`}
                 data-testid={`condition-timeframe-${index}`}
               >
@@ -491,6 +495,18 @@ export function ConditionBuilder({
                 ))}
               </select>
             )}
+
+            {temporal.showTimeframe && <label className="text-[11px] text-[var(--text-secondary)]">
+              Validade (s)
+              <input className="input ml-1 w-20 text-[11px]" type="number" min={1}
+                title="Idade máxima permitida para o indicador e seu candle fechado"
+                value={condition.max_age_seconds ?? candlePolicyForTimeframe(sourcePolicies?.ohlcv || {}, condition.timeframe || defaultTimeframe).max_age_seconds as number ?? ""}
+                onChange={(event) => {
+                  const age = event.target.value ? Number(event.target.value) : undefined;
+                  updateCondition(index, { max_age_seconds: age,
+                    ...(condition.resolved_operands ? { resolved_operands: Object.fromEntries(Object.entries(condition.resolved_operands).map(([side, reference]) => [side, { ...(reference as object), max_age_seconds: age }])) } : {}) });
+                }} data-testid={`condition-validity-${index}`} />
+            </label>}
 
             {temporal.showPeriod && PROFILE_PERIOD_DEFAULTS[primaryIndicator] !== undefined && (
               <input

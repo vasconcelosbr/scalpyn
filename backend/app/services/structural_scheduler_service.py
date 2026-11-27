@@ -305,6 +305,11 @@ async def _run_one_cycle(concurrency: int) -> None:
 
     cycle_start = datetime.now(timezone.utc)
     try:
+        from .canonical_mtf_ownership import canonical_mtf_active
+        if await run_db_task(canonical_mtf_active, celery=False):
+            # H1_CANONICAL_OWNER: legacy H1 rows must not hide governed rows.
+            logger.info("[STRUCT-SCHED] H1 owned by canonical closed-candle chain")
+            return
         symbols = await run_db_task(_collect_symbols, celery=False)
 
         if not symbols:

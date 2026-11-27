@@ -4,6 +4,7 @@ import os
 ALLOWED = (
     'fetch_market_caps', 'collect_research_15m_after_close',
     'collect_research_1h_after_close', 'pump_monitor_cycle',
+    'collect_mtf_15m_after_close', 'collect_mtf_1h_after_close',
     'mtf_chart_after_close',
     'mtf_history_after_close', 'mtf_history_maintenance', 'mtf_replay_progress',
 )

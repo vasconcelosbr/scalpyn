@@ -149,6 +149,7 @@ async def collect_timeframe(timeframe: str) -> dict:
         "capture_contract_version": _CAPTURE_CONTRACT_VERSION,
         "required_warmup_candles": required_warmup,
         "fetch_limit": fetch_limit,
+        "candle_cutoff": int(now.timestamp()) // _TF_SECONDS[timeframe],
     }
     logger.info("[MTF-COLLECT] %s", result)
     return result
@@ -165,9 +166,12 @@ def _collect_and_chain(timeframe: str) -> dict:
     if result["successful_symbols"]:
         from . import task_dispatch
 
+        # Each closed window owns a distinct dedup key. A late previous
+        # collection must not suppress the following hourly computation.
+        cutoff = result.get("candle_cutoff", int(datetime.now(timezone.utc).timestamp()) // _TF_SECONDS[timeframe])
         compute_task_id = task_dispatch.enqueue(
             f"app.tasks.compute_mtf_indicators.compute_{timeframe}",
-            dedup_key=f"compute-mtf-{timeframe}",
+            dedup_key=f"compute-mtf-{timeframe}-{cutoff}",
             ttl_seconds=_TF_SECONDS[timeframe],
         )
         result["compute_task_id"] = compute_task_id

@@ -13,6 +13,12 @@ export interface EvaluationTraceItem {
   // block rules; `condition_matched` is the raw mathematical result.
   outcome?: 'OK' | 'TRIPPED' | 'SKIPPED';
   condition_matched?: boolean | null;
+  conditions?: Array<{
+    condition: string; status: string; reason?: string | null; current_value?: unknown;
+    inputs: Array<{ indicator: string; timeframe: string; reason?: string | null;
+      value?: unknown; observed_value?: unknown; source_provider?: string | null;
+      computed_at?: string | null; source_timestamp?: string | null }>;
+  }>;
 }
 
 // Block rules use OK/TRIPPED instead of PASS/FAIL (Task #253). When the
@@ -59,10 +65,35 @@ export function classifySkip(item: { status: string; reason?: string | null; cur
       kind: 'no_data',
       label: 'SEM DADOS',
       cls: 'border-[#78350F]/40 bg-[#1A1205] text-[#FCD34D]',
-      currentText: 'aguardando coleta',
+      currentText: inputReasonLabel(reason),
     };
   }
   return null;
+}
+
+export function inputReasonLabel(reason?: string | null): string {
+  const labels: Record<string, string> = {
+    indicator_identity_mismatch: 'Origem ou parâmetros incompatíveis com a regra',
+    indicator_stale: 'Dados vencidos para a validade configurada',
+    indicator_candle_not_closed: 'Candle ainda não fechado',
+    indicator_invalid_value: 'Valor inválido',
+    indicator_not_available: 'Indicador ausente no timeframe solicitado',
+  };
+  return labels[reason || ''] || 'Avaliação indisponível; consulte as condições';
+}
+
+export function ConditionInputDetails({ item }: { item: EvaluationTraceItem }) {
+  if (!item.conditions?.length) return null;
+  return <div className="mt-2 space-y-2 border-t border-current/15 pt-2">
+    {item.conditions.map((condition, index) => <div key={index} className="text-[11px]">
+      <div>{condition.condition} · {condition.status === 'SKIPPED' ? 'Não avaliada' : condition.status === 'PASS' ? 'Condição atendida' : 'Condição não atendida'}</div>
+      {condition.inputs.map((input, i) => <div key={i} className="mt-1 text-[#CBD5E1] break-words">
+        <span className="font-mono">{input.indicator} · {input.timeframe} · {formatEvaluationTraceValue(input.value ?? input.observed_value)}</span>
+        {input.reason && <span className="ml-2 text-amber-300">{inputReasonLabel(input.reason)} (não utilizado)</span>}
+        <div className="text-[#94A3B8]">Origem: {input.source_provider || 'não disponível'} · Calculado: {input.computed_at || 'não disponível'} · Candle: {input.source_timestamp || 'não disponível'}</div>
+      </div>)}
+    </div>)}
+  </div>;
 }
 
 export function formatEvaluationTraceValue(value: unknown): string {
@@ -167,6 +198,7 @@ function TraceSection({
               {intentLine && (
                 <div className="mt-0.5 text-[10px] italic opacity-75">{intentLine}</div>
               )}
+              <ConditionInputDetails item={item} />
               <div className="mt-1 flex flex-wrap gap-3 text-[11px]">
                 <span className="break-all">
                   Current:{' '}

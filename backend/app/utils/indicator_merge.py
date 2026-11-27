@@ -76,6 +76,29 @@ _GROUP_STALE: Dict[str, float] = {
 }
 
 
+def _row_stale_limit(group, timeframe, payload):
+    limit = _GROUP_STALE.get(group, STRUCTURAL_STALE_SECONDS)
+    # Governed after-close producers run once per candle. The M5 scheduler's
+    # wall-clock TTL must not expire H1 halfway through its valid candle.
+    governed = any(isinstance(v, dict) and v.get("producer_version") == "mtf_indicator_producer_v1"
+                   for v in (payload or {}).values())
+    if group == "structural" and governed and timeframe in ("15m", "1h"):
+        duration = {"15m": 900, "1h": 3600}[timeframe]
+        return max(limit, duration + max(0, limit - STRUCTURAL_INTERVAL_SECONDS))
+    return limit
+
+
+def _source_age(raw, now):
+    if (not isinstance(raw, dict) or not raw.get("candle_close_time")
+            or raw.get("producer_version") != "mtf_indicator_producer_v1"):
+        return None
+    try:
+        closed = datetime.fromisoformat(str(raw["candle_close_time"]).replace("Z", "+00:00"))
+        return (now - _ensure_utc(closed)).total_seconds()
+    except (TypeError, ValueError):
+        return None
+
+
 def _ensure_utc(ts: Optional[datetime]) -> Optional[datetime]:
     if ts is None:
         return None
@@ -317,7 +340,7 @@ def merge_indicator_rows(
             grp, ts, ind_json = row
             timeframe = None
         ts_utc = _ensure_utc(ts)
-        stale_limit = _GROUP_STALE.get(grp, STRUCTURAL_STALE_SECONDS)
+        stale_limit = _row_stale_limit(grp, timeframe, ind_json)
         if ts_utc is not None:
             age = (now - ts_utc).total_seconds()
             if age > stale_limit:
@@ -389,7 +412,7 @@ def merge_indicator_rows(
             timeframe = None
         ts_utc = _ensure_utc(ts)
         age = (now - ts_utc).total_seconds() if ts_utc is not None else None
-        stale_limit = _GROUP_STALE.get(grp, STRUCTURAL_STALE_SECONDS)
+        stale_limit = _row_stale_limit(grp, timeframe, ind_json)
         is_stale = age is None or age > stale_limit
         for key, raw in (ind_json or {}).items():
             if isinstance(raw, dict) and "value" in raw:
@@ -452,6 +475,7 @@ def merge_indicator_rows(
                     raw.get("available_at") if isinstance(raw, dict) else None
                 ) or ts_utc,
                 "age_seconds": age,
+                "source_age_seconds": _source_age(raw, now),
                 "stale": bool(
                     (raw.get("stale", False) if isinstance(raw, dict) else False)
                     or is_stale
