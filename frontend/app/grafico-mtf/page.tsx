@@ -14,6 +14,7 @@ import { MTFSettingsDialog } from '@/components/mtf/MTFSettingsDialog';
 import { MTFPumpFlow } from '@/components/mtf/MTFPumpFlow';
 import { MTFTriggerDiagnostics } from '@/components/mtf/MTFTriggerDiagnostics';
 import { MTFArmingRoadmap } from '@/components/mtf/MTFArmingRoadmap';
+import { watchlistArmingAnalysis } from '@/lib/mtfArmingRoadmap';
 import { MTFBitcoinTicker } from '@/components/mtf/MTFBitcoinTicker';
 import { MTFFearGreed } from '@/components/mtf/MTFFearGreed';
 import { MTFEntryContext } from '@/components/mtf/MTFEntryContext';
@@ -232,6 +233,7 @@ export default function MTFPage() {
   };
   const historical=stale || membership==='removed';
   const analysis = historical || loadedContext !== `${watchlist}:${symbol}:${profile}` ? undefined : data?.analysis;
+  const armingAnalysis = analysis ?? (!listError ? watchlistArmingAnalysis(assets.find(a=>a.symbol===symbol),symbol,profile,Date.now()) : undefined);
   const plan = analysis?.plan;
   // Consolidated membership/status comes from the same observation as Aprovados;
   // selecting a symbol or an exploratory profile must not rewrite that snapshot.
@@ -281,7 +283,7 @@ export default function MTFPage() {
         {!data && !loading && !evaluationPending && !error && membership!=='removed' && <div className="mtf-empty mtf-welcome"><Activity size={42}/><h2>O contexto antes do gatilho.</h2><p>Selecione uma oportunidade para conectar estrutura, zona e price action.</p><span>ESTRUTURA {(cfg?.timeframes?.structure ?? '4h').toUpperCase()} → ZONA {(cfg?.timeframes?.zone ?? '1h').toUpperCase()} → GATILHO {(cfg?.timeframes?.trigger ?? '5m').toUpperCase()}</span></div>}
       </section>
       {right && <aside className="mtf-analysis">
-        <MTFArmingRoadmap key={`arming:${watchlist}:${symbol}:${profile}`} analysis={analysis} symbol={symbol} date={date} precision={data?.price_format?.precision}/>
+        <MTFArmingRoadmap key={`arming:${watchlist}:${symbol}:${profile}`} analysis={armingAnalysis} symbol={symbol} date={date} precision={data?.symbol===symbol ? data.price_format?.precision : undefined} fromWatchlist={!analysis}/>
         {cfg?.presentation && <MTFPumpFlow key={`flow:${watchlist}:${symbol}:${profile}`} context={analysis?.pump_flow} watchlist={watchlist} pollSeconds={cfg.presentation.watchlist_poll_seconds} timezone={prefs.timezone} stale={historical} />}
         <MTFTriggerDiagnostics key={`${watchlist}:${symbol}:${profile}`} analysis={analysis} symbol={symbol} date={date}
           pending={historical ? 'Avaliação indisponível ou desatualizada. Aguardando atualização.' : undefined}/>
@@ -297,6 +299,6 @@ export default function MTFPage() {
         <section className="mtf-card"><div className="mtf-card-title"><strong>Histórico · Shadow MTF</strong></div><div className="mtf-panel-body">{history.length ? history.map((h,i) => <div className="mtf-history-row" key={h.evaluation.evaluation_id ?? i}><small>{date(h.observed_at)}</small><span>{h.evaluation.trigger_5m ? patternLabels[h.evaluation.trigger_5m.pattern] : statusLabels[h.evaluation.status]}<small>{h.shadow ? shadowLabels[h.shadow.status] ?? 'Estado indisponível' : 'Avaliação'}{h.shadow?.ambiguous ? ' · intrabar ambíguo' : ''}</small></span><b className={(h.shadow?.pnl_pct ?? 0) < 0 ? 'negative' : 'positive'}>{h.shadow?.pnl_pct == null ? '—' : `${number(h.shadow.pnl_pct,2)}%`}</b></div>) : <p className="mtf-muted">Sem avaliações registradas para este contexto. A observação ocorre no backend após o fechamento dos candles.</p>}{cursor && <button className="mtf-more" onClick={moreHistory}>Carregar anteriores <ChevronDown size={13}/></button>}<p className="mtf-muted">Histórico separado do Shadow Portfolio operacional. Resultados líquidos dos custos configurados.</p></div></section>
       </aside>}
     </div>
-    {configOpen && boot && <MTFSettingsDialog config={cfg} boot={boot} onClose={()=>setConfigOpen(false)} onSaved={next=>{setLoadedContext('');setCfg(next);if(!next.candle_limits[tf])setTf(next.timeframes?.structure ?? "4h");setConfigOpen(false);if(!watchlist)setWatchlist(next.default_watchlist);}}/>}
+    {configOpen && boot && <MTFSettingsDialog config={cfg} boot={boot} onClose={()=>setConfigOpen(false)} onSaved={next=>{setLoadedContext('');setAssets([]);setCfg(next);if(!next.candle_limits[tf])setTf(next.timeframes?.structure ?? "4h");setConfigOpen(false);if(!watchlist)setWatchlist(next.default_watchlist);}}/>}
   </div>;
 }

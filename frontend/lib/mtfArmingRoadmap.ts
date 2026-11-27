@@ -1,4 +1,4 @@
-import type { Analysis, TriggerCheck } from '../components/mtf/types';
+import type { Analysis, Asset, TriggerCheck } from '../components/mtf/types';
 import { entryBandView } from './mtfEntryBand';
 
 // Presentation of frozen engine evidence only; never evaluates or authorizes a signal.
@@ -7,6 +7,7 @@ export function armingRoadmap(analysis: Analysis | undefined, symbol: string, no
   const expiry = Date.parse(analysis?.entry_candidate?.valid_until ?? '');
   const expired = analysis?.entry_candidate && (!Number.isFinite(expiry) || now >= expiry);
   if (!analysis || analysis.symbol !== symbol || !diagnostic || expired ||
+      analysis.vetoes?.some(v => v === 'EVALUATION_STALE' || v === 'CONFIG_CHANGED') ||
       diagnostic.status !== analysis.status || diagnostic.config_hash !== analysis.config_hash ||
       diagnostic.checks.some(c => c.id === 'evaluation_current' && c.state !== 'PASS')) return null;
   const checks = diagnostic.checks.filter(c => c.role !== 'context' && c.role !== 'score');
@@ -19,6 +20,15 @@ export function armingRoadmap(analysis: Analysis | undefined, symbol: string, no
     armedRule: checks.find(c => c.id === 'rules:ARMADO'),
     // Canonical group stays intact: a false OR alternative is not an extra veto.
     achieved: analysis.status === 'ARMED' || analysis.status === 'TRIGGERED' };
+}
+
+export function watchlistArmingAnalysis(asset: Asset | undefined, symbol: string, profile: string, now: number): Analysis | undefined {
+  const a = asset?.mtf;
+  if (!a || asset?.symbol !== symbol || !asset.profile_id || a.profile_id !== asset.profile_id ||
+      (profile && profile !== asset.profile_id) || !a.entry_candidate) return undefined;
+  const band = entryBandView(a,true,now);
+  if (!band || band.state === 'UNAVAILABLE' || !armingRoadmap(a,symbol,now)) return undefined;
+  return a;
 }
 
 export interface StructuralReference { kind: 'H' | 'L'; previous: number; latest: number; ascending: boolean }
