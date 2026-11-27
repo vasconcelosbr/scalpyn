@@ -110,7 +110,7 @@ function validateCondition(
       }
     } else if (kind === "number" && !isFiniteNumber(value.value)) {
       issues.push(issue("VALUE_REQUIRED", `${path}.value`, "valor numérico é obrigatório"));
-    } else if (kind === "string" && typeof value.value !== "string") {
+    } else if (kind === "string" && (typeof value.value !== "string" || !value.value.trim())) {
       issues.push(issue("VALUE_REQUIRED", `${path}.value`, "valor textual é obrigatório"));
     }
   }

@@ -22,6 +22,8 @@ jobs:
         run: npm ci
       - working-directory: frontend
         run: node --import tsx --test lib/watchlistDiagnostic.test.ts lib/watchlistDiagnosticProxy.test.ts lib/profileDisplayStatus.test.ts
+      - working-directory: frontend
+        run: node --import tsx --test lib/profileBlockTimeframe.test.ts lib/profileConditionState.test.ts lib/profileImportPreflight.test.ts lib/indicatorCatalog.test.ts
   integration:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -60,6 +62,7 @@ jobs:
         run: |
           python -m alembic heads
           python -m pytest -q tests/test_watchlist_asset_diagnostic.py
+          python -m pytest -q tests/test_profile_block_timeframes.py
           python -m pytest -q tests/test_mtf_queue_starvation.py
           python -m pytest -q tests/test_mtf_signal_replay.py tests/test_mtf_risk_audit.py tests/test_mtf_diagnostic_explanations.py
           python -m pytest -q tests/test_pump_readonly.py tests/test_pump_monitor.py tests/test_pump_score_v1.py tests/test_pump_derivatives_direction.py tests/test_pump_ml_v1_influence.py tests/test_radar_readonly.py
