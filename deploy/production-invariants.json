@@ -2067,8 +2067,12 @@
             "L3_PUBLIC_AUTHORIZATION_V1",
             "def public_authorization",
             "def authorization_expiry",
-            "DecisionLog.created_at.desc()"
+            "latest_profile_decision_ids(user_id=user_id, pairs=pairs)"
           ]
+        },
+        {
+          "path": "backend/app/services/latest_profile_decision.py",
+          "contains_all": ["DecisionLog.created_at.desc()", "DecisionLog.id.desc()", ".limit(1)"]
         },
         {
           "path": "backend/app/services/l3_watchlist_publication.py",
