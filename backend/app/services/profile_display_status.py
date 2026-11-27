@@ -1,11 +1,12 @@
 """Read-only profile classification. This module never grants execution authority."""
 from datetime import datetime, timezone
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import select
 
 from ..models.backoffice import DecisionLog
 from .l3_public_authorization import authorization_expiry, utc
 from .profile_runtime_config import canonical_profile_config_hash
+from .latest_profile_decision import latest_profile_decision_ids
 
 
 def classify_profile_snapshot(row, profile_config, *, watchlist_id, profile_id,
@@ -96,14 +97,9 @@ def classify_profile_snapshot(row, profile_config, *, watchlist_id, profile_id,
 def latest_profile_decisions_statement(*, user_id, pairs):
     # PROFILE_DISPLAY_LATEST_IDS_FIRST: sort/deduplicate narrow rows before
     # extracting JSONB. Historical metrics can be megabytes per decision.
-    latest_ids = (select(DecisionLog.id).where(
-        DecisionLog.user_id == user_id,
-        tuple_(DecisionLog.profile_id, DecisionLog.symbol).in_(pairs),
-        DecisionLog.event_type.notin_(['PROFILE_CONSOLIDATION', 'PROFILE_CONSOLIDATION_REJECTED'])
-    ).distinct(DecisionLog.profile_id, DecisionLog.symbol)
-     .order_by(DecisionLog.profile_id, DecisionLog.symbol,
-               DecisionLog.created_at.desc(), DecisionLog.id.desc())
-     .subquery('latest_profile_decision_ids'))
+    latest_ids = latest_profile_decision_ids(
+        user_id=user_id, pairs=pairs
+    ).subquery('latest_profile_decision_ids')
     contract = DecisionLog.metrics['l3_authorization_contract_v3']
     return select(
         DecisionLog.id, DecisionLog.symbol, DecisionLog.profile_id, DecisionLog.score,

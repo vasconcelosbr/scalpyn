@@ -1,5 +1,7 @@
 """Preserve latest-decision semantics while keeping historical JSON out of sorting."""
 import json
+import importlib.util
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
@@ -8,6 +10,7 @@ from sqlalchemy.dialects import postgresql
 
 from app.models.backoffice import DecisionLog
 from app.services.profile_display_status import latest_profile_decisions_statement
+from app.services.latest_profile_decision import latest_profile_decision_ids
 from test_mtf_chart_postgres import database
 
 
@@ -62,8 +65,57 @@ def test_latest_decisions_match_legacy_without_sorting_historical_json(database)
     def nodes(node):
         yield node
         for child in node.get('Plans',[]): yield from nodes(child)
-    uniques=[n for n in nodes(plan) if n['Node Type']=='Unique']
-    assert uniques, 'Latest-per-pair selection must precede evidence extraction'
-    # This checks the actual PG plan: historical JSON must not be projected into Unique/Sort.
-    for unique in uniques:
-        assert all('metrics' not in expr for n in nodes(unique) for expr in n.get('Output',[]))
+    limits=[n for n in nodes(plan) if n['Node Type']=='Limit']
+    assert limits, 'Latest-per-pair selection must precede evidence extraction'
+    for limit in limits:
+        assert all('metrics' not in expr for n in nodes(limit) for expr in n.get('Output',[]))
+    assert set(db.scalars(latest_profile_decision_ids(user_id=uid,pairs=pairs))) == set(new)
+
+
+def test_latest_lookup_uses_bounded_index_without_parallel_history_scan(database):
+    db, uid = database
+    profile = uuid4()
+    db.execute(sa.text('''CREATE TABLE decisions_log (
+        id bigint PRIMARY KEY,user_id uuid,profile_id uuid,symbol text,
+        created_at timestamptz,event_type text,score float,metrics jsonb)'''))
+    db.execute(sa.text('''INSERT INTO decisions_log
+        SELECT n, :u, :p, 'ASSET_' || (n % 20),
+            timestamptz '2026-11-17 00:00:00+00' + n * interval '1 second',
+            'PROFILE_EVALUATION', 0, '{}'::jsonb
+        FROM generate_series(1, 20000) n'''), {'u':uid,'p':profile})
+    path=Path(__file__).parents[1]/'alembic/versions/254_profile_latest_index.py'
+    spec=importlib.util.spec_from_file_location('latest_index_migration',path)
+    migration=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    # Fixture is transactional; use the exact index definition without CONCURRENTLY.
+    db.execute(sa.text(migration.INDEX_SQL.replace('CONCURRENTLY ','')))
+    db.execute(sa.text('ANALYZE decisions_log'))
+    db.execute(sa.text('SET LOCAL max_parallel_workers_per_gather=12'))
+    db.execute(sa.text('SET LOCAL min_parallel_table_scan_size=0'))
+    db.execute(sa.text('SET LOCAL parallel_setup_cost=0'))
+    db.execute(sa.text('SET LOCAL parallel_tuple_cost=0'))
+    pairs={(profile,f'ASSET_{n}') for n in range(20)} | {(profile,'MISSING')}
+    stmt=latest_profile_decision_ids(user_id=uid,pairs=pairs)
+    sql=str(stmt.compile(dialect=postgresql.dialect(),compile_kwargs={'literal_binds':True}))
+    plan=db.scalar(sa.text('EXPLAIN (ANALYZE,VERBOSE,FORMAT JSON) '+sql))[0]['Plan']
+    def nodes(node):
+        yield node
+        for child in node.get('Plans',[]): yield from nodes(child)
+    actual=list(nodes(plan))
+    assert not any(n.get('Parallel Aware') or n['Node Type'].startswith('Gather') for n in actual)
+    scans=[n for n in actual if n.get('Index Name')=='ix_decisions_profile_symbol_latest']
+    assert scans and all(n['Actual Rows'] <= 1 for n in scans)
+    assert set(db.scalars(stmt)) == set(range(19981,20001))
+    # Reused prepared plans must still prove the fixed partial-index predicate.
+    compiled=stmt.compile(dialect=postgresql.dialect())
+    assert 'PROFILE_CONSOLIDATION' not in str(compiled.params)
+    prepared=sql.replace("'"+str(uid)+"'",'$1').replace("'"+str(profile)+"'",'$2')
+    db.execute(sa.text('SET LOCAL plan_cache_mode=force_generic_plan'))
+    db.execute(sa.text('PREPARE latest_profile_probe(uuid,uuid) AS '+prepared))
+    try:
+        plan=db.scalar(sa.text(f"EXPLAIN (ANALYZE,FORMAT JSON) EXECUTE latest_profile_probe('{uid}','{profile}')"))[0]['Plan']
+        actual=list(nodes(plan))
+        assert not any(n.get('Parallel Aware') or n['Node Type'].startswith('Gather') for n in actual)
+        assert any(n.get('Index Name')=='ix_decisions_profile_symbol_latest' for n in actual)
+    finally:
+        db.execute(sa.text('DEALLOCATE latest_profile_probe'))

@@ -151,13 +151,15 @@ async def test_latest_block_is_not_filtered_out_before_latest_decision_selection
     assert result == {}
     main_query = db.execute.call_args_list[0].args[0]
     sql = str(main_query.compile(dialect=postgresql.dialect()))
-    assert "DISTINCT ON" in sql and "created_at DESC" in sql
+    assert "JOIN LATERAL" in sql and "created_at DESC" in sql
+    assert "DISTINCT ON" not in sql
     assert "decision =" not in sql
     # 2026-09-21: PROFILE_CONSOLIDATION rows are pure audit records with no
     # contract -- excluded from "latest" so a real ALLOW decision is never
     # masked by its own later suppression audit row.
     sql_literal = str(main_query.compile(
         dialect=postgresql.dialect(), compile_kwargs={"literal_binds": True}))
+    assert "LIMIT 1" in sql_literal
     assert "event_type NOT IN ('PROFILE_CONSOLIDATION', 'PROFILE_CONSOLIDATION_REJECTED')" in sql_literal
 
 
